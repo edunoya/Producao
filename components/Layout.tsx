@@ -11,13 +11,15 @@ import {
   Settings,
   Download,
   Upload,
-  Cloud
+  Cloud,
+  RefreshCw,
+  Wifi
 } from 'lucide-react';
 import { useInventory } from '../store/InventoryContext';
 
 const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
-  const { notifications, dismissNotification, exportData, importData } = useInventory();
+  const { notifications, isSyncing, exportData, importData } = useInventory();
   const [showNotifs, setShowNotifs] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -40,12 +42,6 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       };
       reader.readAsText(file);
     }
-  };
-
-  const handleCloudSync = () => {
-    // Simulação de Sincronização Google Drive
-    alert("Sincronização com Google Drive: Esta função requer registro de API Console. Os dados foram exportados localmente para simular o upload.");
-    exportData();
   };
 
   return (
@@ -74,26 +70,25 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </nav>
 
         <div className="pt-6 border-t border-gray-100 mt-6 space-y-2">
-          <p className="text-[10px] font-bold text-gray-400 uppercase mb-2 tracking-widest">Sincronização</p>
-          <button onClick={handleCloudSync} className="flex items-center gap-2 text-xs text-sky-500 font-bold hover:text-sky-700 w-full p-2 transition-colors">
-            <Cloud size={14} /> Google Drive Sync
-          </button>
+          <p className="text-[10px] font-bold text-gray-400 uppercase mb-2 tracking-widest">Manutenção</p>
           <button onClick={exportData} className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-800 w-full p-2 transition-colors">
-            <Download size={14} /> Exportar Backup
+            <Download size={14} /> Backup Local
           </button>
           <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-800 w-full p-2 transition-colors">
-            <Upload size={14} /> Importar Dados
+            <Upload size={14} /> Restaurar Local
           </button>
           <input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" accept=".json" />
         </div>
 
         <div className="pt-6 mt-6 border-t border-gray-100">
           <div className="flex items-center gap-3 p-2">
-            <div className="w-8 h-8 rounded-full bg-rose-100 flex items-center justify-center text-rose-500 font-bold text-xs">AD</div>
-            <div>
-              <p className="text-sm font-semibold text-gray-700">Admin</p>
-              <p className="text-xs text-green-500">PWA Ativo</p>
-            </div>
+             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${isSyncing ? 'bg-amber-100 text-amber-600' : 'bg-green-100 text-green-600'}`}>
+               {isSyncing ? <RefreshCw size={14} className="animate-spin" /> : <Wifi size={14} />}
+             </div>
+             <div>
+               <p className="text-xs font-bold text-gray-700">{isSyncing ? 'Sincronizando...' : 'Nuvem Ativa'}</p>
+               <p className="text-[9px] text-gray-400">Dados protegidos</p>
+             </div>
           </div>
         </div>
       </aside>
@@ -104,16 +99,20 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
              <div className="w-8 h-8 bg-rose-400 rounded-lg flex items-center justify-center text-white font-bold shadow-sm">G</div>
              <h1 className="text-lg font-bold text-gray-800">Gelato Flow</h1>
           </div>
-          <h2 className="hidden md:block text-lg font-semibold text-gray-800">
-            {navItems.find(i => i.path === location.pathname)?.label || 'Bem-vindo'}
-          </h2>
-
-          <div className="relative flex items-center gap-2">
-            <button onClick={() => setShowNotifs(!showNotifs)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full relative">
-              <Bell size={22} />
-              {notifications.length > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-rose-500 rounded-full border-2 border-white"></span>}
-            </button>
+          
+          <div className="flex items-center gap-4">
+            <div className={`md:hidden p-2 rounded-full ${isSyncing ? 'text-amber-500' : 'text-green-500'}`}>
+               {isSyncing ? <RefreshCw size={18} className="animate-spin" /> : <Wifi size={18} />}
+            </div>
+            <h2 className="hidden md:block text-lg font-semibold text-gray-800">
+              {navItems.find(i => i.path === location.pathname)?.label || 'Bem-vindo'}
+            </h2>
           </div>
+
+          <button onClick={() => setShowNotifs(!showNotifs)} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full relative">
+            <Bell size={22} />
+            {notifications.length > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-rose-500 rounded-full border-2 border-white"></span>}
+          </button>
         </header>
 
         <div className="p-6">
