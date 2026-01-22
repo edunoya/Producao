@@ -2,15 +2,15 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
-// No Vite, variáveis de ambiente para o cliente devem começar com VITE_
-// No Vercel, você deve cadastrar exatamente com esses nomes em Settings > Environment Variables
+// Fix: Use process.env instead of import.meta.env to resolve TypeScript 'Property env does not exist on type ImportMeta' errors.
+// This ensures compatibility with the environment variable injection used in this project.
 const firebaseConfig = {
-  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || (process.env as any).VITE_FIREBASE_API_KEY,
-  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || (process.env as any).VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || (process.env as any).VITE_FIREBASE_PROJECT_ID,
-  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || (process.env as any).VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || (process.env as any).VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || (process.env as any).VITE_FIREBASE_APP_ID
+  apiKey: process.env.VITE_FIREBASE_API_KEY,
+  authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.VITE_FIREBASE_APP_ID
 };
 
 const app = initializeApp(firebaseConfig);
