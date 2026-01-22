@@ -1,13 +1,7 @@
-
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApp, getApps } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
-// Verificação de segurança para garantir que as chaves existem
 const apiKey = process.env.VITE_FIREBASE_API_KEY;
-
-if (!apiKey) {
-  console.warn("Firebase API Key não encontrada. Verifique as Environment Variables no Vercel.");
-}
 
 const firebaseConfig = {
   apiKey: apiKey,
@@ -18,5 +12,14 @@ const firebaseConfig = {
   appId: process.env.VITE_FIREBASE_APP_ID
 };
 
-const app = initializeApp(firebaseConfig);
+// Inicializa apenas se tiver as chaves mínimas e não estiver já inicializado
+let app;
+if (apiKey && apiKey.length > 5) {
+  app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+} else {
+  console.error("Firebase API Key ausente. Verifique Settings > Environment Variables no Vercel.");
+  // Mock ou app vazio para evitar crashes em cadeia
+  app = !getApps().length ? initializeApp({apiKey: "dummy", projectId: "dummy"}) : getApp();
+}
+
 export const db = getFirestore(app);

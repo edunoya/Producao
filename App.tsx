@@ -1,5 +1,4 @@
-
-import React from 'react';
+import React, { Suspense } from 'react';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { InventoryProvider } from './store/InventoryContext';
 import Layout from './components/Layout';
@@ -8,7 +7,13 @@ import ProductionForm from './components/ProductionForm';
 import DistributionForm from './components/DistributionForm';
 import InventoryList from './components/InventoryList';
 import Settings from './components/Settings';
-import { BarChart3, Settings as SettingsIcon } from 'lucide-react';
+import { BarChart3, Loader2 } from 'lucide-react';
+
+const LoadingFallback = () => (
+  <div className="flex items-center justify-center h-screen bg-[#fcfaf7]">
+    <Loader2 className="w-8 h-8 text-rose-500 animate-spin" />
+  </div>
+);
 
 const Reports: React.FC = () => (
   <div className="flex flex-col items-center justify-center p-12 bg-white rounded-3xl border border-gray-100 min-h-[400px]">
@@ -24,20 +29,23 @@ const Reports: React.FC = () => (
 
 const App: React.FC = () => {
   return (
-    <HashRouter>
-      <InventoryProvider>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/producao" element={<ProductionForm />} />
-            <Route path="/distribuicao" element={<DistributionForm />} />
-            <Route path="/estoque" element={<InventoryList />} />
-            <Route path="/configuracoes" element={<Settings />} />
-            <Route path="/relatorios" element={<Reports />} />
-          </Routes>
-        </Layout>
-      </InventoryProvider>
-    </HashRouter>
+    <Suspense fallback={<LoadingFallback />}>
+      <HashRouter>
+        <InventoryProvider>
+          <Layout>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/producao" element={<ProductionForm />} />
+              <Route path="/distribuicao" element={<DistributionForm />} />
+              <Route path="/estoque" element={<InventoryList />} />
+              <Route path="/configuracoes" element={<Settings />} />
+              <Route path="/relatorios" element={<Reports />} />
+              <Route path="*" element={<Dashboard />} />
+            </Routes>
+          </Layout>
+        </InventoryProvider>
+      </HashRouter>
+    </Suspense>
   );
 };
 

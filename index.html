@@ -14,6 +14,8 @@
       body {
         font-family: 'Plus Jakarta Sans', sans-serif;
         background-color: #fcfaf7;
+        margin: 0;
+        padding: 0;
       }
       .custom-scrollbar::-webkit-scrollbar {
         width: 4px;
@@ -33,6 +35,11 @@
         border-color: #FB7185;
         background-color: #FFF1F2;
         transform: scale(0.98);
+      }
+      /* Previne flashes brancos durante o carregamento */
+      #root:empty {
+        background-color: #fcfaf7;
+        height: 100vh;
       }
     </style>
   <script type="importmap">
@@ -54,6 +61,7 @@
 </head>
   <body>
     <div id="root"></div>
+    <!-- O Vite injetará o bundle final aqui, ou usará este caminho no dev -->
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>
