@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Bucket, ProductionEntry, DistributionEntry, Notification, StoreName, Flavor, Category, ProductionLog } from '../types';
 import { INITIAL_FLAVORS, INITIAL_CATEGORIES } from '../constants';
@@ -8,9 +7,7 @@ import {
   onSnapshot, 
   setDoc, 
   doc, 
-  updateDoc, 
-  arrayUnion,
-  getDoc
+  updateDoc
 } from 'firebase/firestore';
 
 interface InventoryContextType {
@@ -20,8 +17,10 @@ interface InventoryContextType {
   productionLogs: ProductionLog[];
   notifications: Notification[];
   isSyncing: boolean;
-  addProduction: (entries: ProductionEntry[]) => void;
+  addProduction: (entries: ProductionEntry[], productionDate: Date) => void;
   distributeBuckets: (entry: DistributionEntry) => void;
+  updateBucket: (bucket: Bucket) => void;
+  deleteBucket: (id: string) => void;
   updateFlavor: (flavor: Flavor) => void;
   addCategory: (name: string) => void;
   updateCategory: (category: Category) => void;
@@ -41,11 +40,14 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isSyncing, setIsSyncing] = useState(true);
 
-  // Sincronização em Tempo Real com Firestore
   useEffect(() => {
     const unsubBuckets = onSnapshot(collection(db, "inventory"), (snapshot) => {
       const data: any[] = [];
-      snapshot.forEach(doc => data.push(...doc.data().items));
+      snapshot.forEach(doc => {
+        if (doc.id === "all_buckets") {
+          data.push(...doc.data().items);
+        }
+      });
       setBuckets(data.map(b => ({ ...b, producedAt: new Date(b.producedAt) })));
       setIsSyncing(false);
     });
@@ -72,39 +74,27 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setNotifications(prev => [newNotif, ...prev].slice(0, 10));
   }, []);
 
-  const syncToCloud = async (newBuckets: Bucket[], newLogs: ProductionLog[]) => {
-    try {
-      // Salva baldes (divididos por lotes para performance)
-      await setDoc(doc(db, "inventory", "all_buckets"), { items: [...buckets, ...newBuckets] });
-      // Salva Logs e Meta
-      await updateDoc(doc(db, "settings", "main"), {
-        productionLogs: [...newLogs, ...productionLogs],
-        flavors,
-        categories
-      });
-    } catch (e) {
-      console.error("Erro ao sincronizar:", e);
-      addNotification("Erro de conexão com a nuvem", "warning");
-    }
-  };
-
-  const addProduction = async (entries: ProductionEntry[]) => {
+  const addProduction = async (entries: ProductionEntry[], productionDate: Date) => {
     const newBuckets: Bucket[] = [];
     const newLogs: ProductionLog[] = [];
-    const today = new Date();
-    const dateStr = `${today.getDate().toString().padStart(2, '0')}${(today.getMonth() + 1).toString().padStart(2, '0')}`;
+    const dateStr = `${productionDate.getDate().toString().padStart(2, '0')}${(productionDate.getMonth() + 1).toString().padStart(2, '0')}`;
 
     entries.forEach(entry => {
       const flavor = flavors.find(f => f.id === entry.flavorId);
       const initials = flavor?.initials || 'XXX';
-      let dailySeq = buckets.filter(b => b.flavorId === entry.flavorId && new Date(b.producedAt).toDateString() === today.toDateString()).length + 1;
+      
+      // Contagem para sequência baseada na data de produção escolhida
+      let dailySeq = buckets.filter(b => 
+        b.flavorId === entry.flavorId && 
+        new Date(b.producedAt).toLocaleDateString() === productionDate.toLocaleDateString()
+      ).length + 1;
 
       entry.weights.forEach(weight => {
         newBuckets.push({
-          id: `${initials}-${dateStr}-${dailySeq.toString().padStart(2, '0')}`,
+          id: `${initials}-${dateStr}-${dailySeq.toString().padStart(2, '0')}-${Math.random().toString(36).substr(2, 4)}`,
           flavorId: entry.flavorId,
           grams: weight,
-          producedAt: new Date(),
+          producedAt: productionDate,
           note: entry.note,
           location: 'Fábrica',
           status: 'estoque',
@@ -118,13 +108,46 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         flavorId: entry.flavorId,
         totalGrams: entry.weights.reduce((a, b) => a + b, 0),
         bucketCount: entry.weights.length,
-        date: new Date(),
+        date: productionDate,
         note: entry.note
       });
     });
 
-    await syncToCloud(newBuckets, newLogs);
-    addNotification(`Produção registrada na nuvem.`, 'success');
+    const updatedBuckets = [...buckets, ...newBuckets];
+    const updatedLogs = [...newLogs, ...productionLogs];
+
+    try {
+      await setDoc(doc(db, "inventory", "all_buckets"), { items: updatedBuckets });
+      await updateDoc(doc(db, "settings", "main"), {
+        productionLogs: updatedLogs,
+        flavors,
+        categories
+      });
+      addNotification(`Produção registrada para ${productionDate.toLocaleDateString()}.`, 'success');
+    } catch (e) {
+      console.error(e);
+      addNotification("Erro ao salvar produção", "warning");
+    }
+  };
+
+  const updateBucket = async (updatedBucket: Bucket) => {
+    const updatedBuckets = buckets.map(b => b.id === updatedBucket.id ? updatedBucket : b);
+    try {
+      await setDoc(doc(db, "inventory", "all_buckets"), { items: updatedBuckets });
+      addNotification("Balde atualizado.", "success");
+    } catch (e) {
+      addNotification("Erro ao atualizar balde.", "warning");
+    }
+  };
+
+  const deleteBucket = async (id: string) => {
+    const updatedBuckets = buckets.filter(b => b.id !== id);
+    try {
+      await setDoc(doc(db, "inventory", "all_buckets"), { items: updatedBuckets });
+      addNotification("Balde removido do estoque.", "info");
+    } catch (e) {
+      addNotification("Erro ao excluir balde.", "warning");
+    }
   };
 
   const distributeBuckets = async (entry: DistributionEntry) => {
@@ -185,7 +208,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   return (
     <InventoryContext.Provider value={{ 
       buckets, flavors, categories, productionLogs, notifications, isSyncing, addProduction, distributeBuckets, 
-      updateFlavor, addCategory, updateCategory, deleteCategory, dismissNotification, exportData, importData 
+      updateBucket, deleteBucket, updateFlavor, addCategory, updateCategory, deleteCategory, dismissNotification, exportData, importData 
     }}>
       {children}
     </InventoryContext.Provider>

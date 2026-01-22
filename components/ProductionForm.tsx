@@ -1,16 +1,15 @@
-
 import React, { useState } from 'react';
 import { useInventory } from '../store/InventoryContext';
-import { Plus, Trash2, Save, Calendar, History, Search } from 'lucide-react';
+import { Plus, Trash2, Save, Calendar, History } from 'lucide-react';
 import { ProductionEntry } from '../types';
 
 const ProductionForm: React.FC = () => {
   const { addProduction, flavors, productionLogs } = useInventory();
+  const [productionDate, setProductionDate] = useState(new Date().toISOString().split('T')[0]);
   const [entries, setEntries] = useState<ProductionEntry[]>(() => [
     { flavorId: flavors.filter(f => f.isActive)[0]?.id || '', weights: [5000], note: '' }
   ]);
 
-  // Filtros de Histórico
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
@@ -52,7 +51,11 @@ const ProductionForm: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    addProduction(entries);
+    const dateObj = new Date(productionDate);
+    // Ajuste de timezone para evitar que mude o dia
+    dateObj.setMinutes(dateObj.getMinutes() + dateObj.getTimezoneOffset());
+    
+    addProduction(entries, dateObj);
     setEntries([{ flavorId: activeFlavors[0]?.id || '', weights: [5000], note: '' }]);
   };
 
@@ -70,21 +73,25 @@ const ProductionForm: React.FC = () => {
 
   return (
     <div className="max-w-5xl mx-auto space-y-10">
-      {/* Formulário de Registro */}
       <div className="bg-white p-6 md:p-8 rounded-3xl border border-gray-100 shadow-sm">
-        <div className="flex justify-between items-center mb-8">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
           <div>
             <h3 className="text-xl font-bold text-gray-800">Nova Produção</h3>
-            <p className="text-sm text-gray-400">Registre os pesos dos baldes fabricados hoje.</p>
+            <p className="text-sm text-gray-400">Registre os pesos dos baldes fabricados.</p>
           </div>
-          <button 
-            type="button" 
-            onClick={addRow}
-            className="p-2 bg-rose-50 text-rose-500 rounded-xl hover:bg-rose-100 transition-colors flex items-center gap-2 text-sm font-bold"
-          >
-            <Plus size={18} />
-            <span className="hidden md:inline">Novo Sabor</span>
-          </button>
+          
+          <div className="flex items-center gap-3 bg-rose-50 p-3 rounded-2xl border border-rose-100">
+            <Calendar size={18} className="text-rose-500" />
+            <div className="flex flex-col">
+              <label className="text-[10px] font-bold text-rose-400 uppercase">Data da Produção</label>
+              <input 
+                type="date" 
+                value={productionDate}
+                onChange={(e) => setProductionDate(e.target.value)}
+                className="bg-transparent border-none text-sm font-bold text-rose-600 outline-none p-0 cursor-pointer"
+              />
+            </div>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-8">
@@ -156,6 +163,16 @@ const ProductionForm: React.FC = () => {
             </div>
           ))}
 
+          <div className="flex justify-center md:justify-end">
+            <button 
+              type="button" 
+              onClick={addRow}
+              className="flex items-center gap-2 text-sm font-bold text-rose-500 bg-rose-50 px-6 py-3 rounded-2xl border border-rose-100 hover:bg-rose-100 transition-all"
+            >
+              <Plus size={20} /> Adicionar outro sabor a este lote
+            </button>
+          </div>
+
           <div className="pt-6 flex flex-col md:flex-row gap-4 items-center justify-between border-t border-gray-100">
             <div className="flex items-center gap-4">
               <div className="text-gray-400 text-sm">
@@ -170,13 +187,12 @@ const ProductionForm: React.FC = () => {
               className="w-full md:w-auto px-10 py-4 bg-rose-500 text-white rounded-2xl font-bold shadow-xl shadow-rose-100 hover:bg-rose-600 active:scale-95 transition-all flex items-center justify-center gap-2"
             >
               <Save size={20} />
-              Salvar Lote de Produção
+              Salvar Produção
             </button>
           </div>
         </form>
       </div>
 
-      {/* Histórico de Produção */}
       <div className="bg-white p-6 md:p-8 rounded-3xl border border-gray-100 shadow-sm">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
           <div>
@@ -216,7 +232,7 @@ const ProductionForm: React.FC = () => {
                 <th className="px-4 py-3">Sabor</th>
                 <th className="px-4 py-3 text-center">Baldes</th>
                 <th className="px-4 py-3 text-center">Peso Total</th>
-                <th className="px-4 py-3">Data</th>
+                <th className="px-4 py-3">Data Ref.</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -232,9 +248,8 @@ const ProductionForm: React.FC = () => {
                       <td className="px-4 py-3 font-bold">{flavor?.name}</td>
                       <td className="px-4 py-3 text-center">{log.bucketCount} un</td>
                       <td className="px-4 py-3 text-center text-rose-500 font-semibold">{log.totalGrams / 1000} kg</td>
-                      <td className="px-4 py-3 text-xs text-gray-400 flex items-center gap-1.5">
-                        <Calendar size={12} />
-                        {log.date.toLocaleDateString()} {log.date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                      <td className="px-4 py-3 text-xs text-gray-400">
+                        {log.date.toLocaleDateString()}
                       </td>
                     </tr>
                   )

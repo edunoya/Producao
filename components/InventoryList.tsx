@@ -1,14 +1,18 @@
-
 import React, { useState } from 'react';
 import { useInventory } from '../store/InventoryContext';
 import { STORES } from '../constants';
-import { Filter, Search, Tag, MapPin, Calendar, Package, Store } from 'lucide-react';
+import { Search, Tag, MapPin, Package, Store, Edit2, Trash2, Check, X } from 'lucide-react';
+import { Bucket } from '../types';
 
 const InventoryList: React.FC = () => {
-  const { buckets, flavors, categories } = useInventory();
+  const { buckets, flavors, categories, updateBucket, deleteBucket } = useInventory();
   const [filterStore, setFilterStore] = useState<string>('Todos');
   const [filterCategory, setFilterCategory] = useState<string>('Todos');
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Estado para edição
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editBucket, setEditBucket] = useState<Bucket | null>(null);
 
   const filteredBuckets = buckets.filter(b => {
     const flavor = flavors.find(f => f.id === b.flavorId);
@@ -19,13 +23,30 @@ const InventoryList: React.FC = () => {
     return matchesStore && matchesCategory && matchesSearch;
   });
 
-  // Cálculos de Resumo
   const getWeightByLocation = (loc: string) => buckets.filter(b => b.location === loc).reduce((acc, b) => acc + b.grams, 0) / 1000;
   const totalGlobalKg = buckets.reduce((acc, b) => acc + b.grams, 0) / 1000;
 
+  const handleStartEdit = (b: Bucket) => {
+    setEditingId(b.id);
+    setEditBucket({ ...b });
+  };
+
+  const handleSaveEdit = () => {
+    if (editBucket) {
+      updateBucket(editBucket);
+      setEditingId(null);
+      setEditBucket(null);
+    }
+  };
+
+  const handleDelete = (id: string) => {
+    if (window.confirm("Deseja realmente remover este balde do estoque? Esta ação não pode ser desfeita.")) {
+      deleteBucket(id);
+    }
+  };
+
   return (
     <div className="space-y-8">
-      {/* Resumo Visual Superior */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="bg-rose-500 p-4 rounded-2xl text-white shadow-lg shadow-rose-100 flex flex-col justify-between">
            <Package size={20} className="mb-2 opacity-80" />
@@ -98,10 +119,10 @@ const InventoryList: React.FC = () => {
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
                 <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase">Sabor</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase">Peso / Status</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase">Localização</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase text-center">Peso</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase">ID / Produção</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase">Status</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase text-right">Ações</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -111,10 +132,12 @@ const InventoryList: React.FC = () => {
                 </tr>
               ) : (
                 filteredBuckets.map(b => {
+                  const isEditing = editingId === b.id;
                   const flavor = flavors.find(f => f.id === b.flavorId);
                   const category = categories.find(c => c.id === flavor?.categoryId);
+
                   return (
-                    <tr key={b.id} className="hover:bg-gray-50/50 transition-colors">
+                    <tr key={b.id} className={`hover:bg-gray-50/50 transition-colors ${isEditing ? 'bg-rose-50/30' : ''}`}>
                       <td className="px-6 py-4">
                         <div className="flex flex-col">
                           <span className="text-sm font-bold text-gray-800">{flavor?.name}</span>
@@ -122,14 +145,51 @@ const InventoryList: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <span className={`px-2 py-1 rounded-lg text-[10px] font-bold ${
-                          b.location === 'Fábrica' ? 'bg-orange-50 text-orange-600' : 'bg-sky-50 text-sky-600'
-                        }`}>
-                          {b.location}
-                        </span>
+                        {isEditing ? (
+                          <div className="flex flex-col gap-2">
+                             <input 
+                              type="number"
+                              value={editBucket?.grams}
+                              onChange={(e) => setEditBucket({ ...editBucket!, grams: Number(e.target.value) })}
+                              className="w-24 bg-white border border-rose-200 rounded px-2 py-1 text-xs font-bold"
+                             />
+                             <select
+                               value={editBucket?.status}
+                               onChange={(e) => setEditBucket({ ...editBucket!, status: e.target.value as any })}
+                               className="w-24 bg-white border border-rose-200 rounded px-2 py-1 text-[10px]"
+                             >
+                               <option value="estoque">Estoque</option>
+                               <option value="vendido">Vendido</option>
+                               <option value="distribuido">Distribuído</option>
+                             </select>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col">
+                            <span className="text-sm font-bold text-gray-600">{b.grams}g</span>
+                            <div className="flex items-center gap-1 mt-0.5">
+                               <div className={`w-1 h-1 rounded-full ${b.status === 'estoque' ? 'bg-green-400' : 'bg-gray-300'}`}></div>
+                               <span className="text-[8px] font-bold text-gray-400 uppercase">{b.status}</span>
+                            </div>
+                          </div>
+                        )}
                       </td>
-                      <td className="px-6 py-4 text-sm font-bold text-center text-gray-600">
-                        {b.grams}g
+                      <td className="px-6 py-4">
+                        {isEditing ? (
+                          <select
+                            value={editBucket?.location}
+                            onChange={(e) => setEditBucket({ ...editBucket!, location: e.target.value as any })}
+                            className="bg-white border border-rose-200 rounded px-2 py-1 text-[10px]"
+                          >
+                            <option value="Fábrica">Fábrica</option>
+                            {STORES.map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        ) : (
+                          <span className={`px-2 py-1 rounded-lg text-[10px] font-bold ${
+                            b.location === 'Fábrica' ? 'bg-orange-50 text-orange-600' : 'bg-sky-50 text-sky-600'
+                          }`}>
+                            {b.location}
+                          </span>
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex flex-col">
@@ -137,11 +197,32 @@ const InventoryList: React.FC = () => {
                            <span className="text-[9px] text-gray-400 italic">{b.producedAt.toLocaleDateString()}</span>
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                         <div className="flex items-center gap-1.5">
-                            <div className={`w-1.5 h-1.5 rounded-full ${b.status === 'estoque' ? 'bg-green-400' : 'bg-gray-300'}`}></div>
-                            <span className="text-[10px] font-bold text-gray-500 uppercase">{b.status}</span>
-                         </div>
+                      <td className="px-6 py-4 text-right">
+                        {isEditing ? (
+                          <div className="flex items-center justify-end gap-2">
+                             <button onClick={handleSaveEdit} className="p-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600">
+                               <Check size={14} />
+                             </button>
+                             <button onClick={() => setEditingId(null)} className="p-1.5 bg-gray-400 text-white rounded-lg hover:bg-gray-500">
+                               <X size={14} />
+                             </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-end gap-2">
+                             <button 
+                              onClick={() => handleStartEdit(b)}
+                              className="p-1.5 text-gray-400 hover:text-sky-500 hover:bg-sky-50 rounded-lg transition-all"
+                             >
+                               <Edit2 size={16} />
+                             </button>
+                             <button 
+                              onClick={() => handleDelete(b.id)}
+                              className="p-1.5 text-gray-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-all"
+                             >
+                               <Trash2 size={16} />
+                             </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
