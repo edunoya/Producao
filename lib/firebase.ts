@@ -2,10 +2,15 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
-// Fix: Use process.env instead of import.meta.env to resolve TypeScript 'Property env does not exist on type ImportMeta' errors.
-// This ensures compatibility with the environment variable injection used in this project.
+// Verificação de segurança para garantir que as chaves existem
+const apiKey = process.env.VITE_FIREBASE_API_KEY;
+
+if (!apiKey) {
+  console.warn("Firebase API Key não encontrada. Verifique as Environment Variables no Vercel.");
+}
+
 const firebaseConfig = {
-  apiKey: process.env.VITE_FIREBASE_API_KEY,
+  apiKey: apiKey,
   authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: process.env.VITE_FIREBASE_PROJECT_ID,
   storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET,

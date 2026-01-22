@@ -24,9 +24,11 @@ export const getInventoryInsights = async (buckets: Bucket[], flavors: Flavor[])
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      // Upgrade to gemini-3-pro-preview for complex reasoning and data analysis tasks.
+      model: 'gemini-3-pro-preview',
       contents: prompt,
     });
+    // Ensure response.text is accessed as a property, not a method.
     return response.text || "Sem insights disponíveis no momento.";
   } catch (error) {
     console.error("Gemini Error:", error);
