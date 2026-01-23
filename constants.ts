@@ -28,11 +28,12 @@ export const INITIAL_CATEGORIES: Category[] = [
   { id: '4', name: 'Veganos' }
 ];
 
+// Fixed: Changed categoryId to categoryIds (array) to match Flavor interface definition in types.ts
 export const INITIAL_FLAVORS: Flavor[] = rawFlavors.map((name, index) => ({
   id: String(index + 1),
   name,
   initials: getInitials(name),
-  categoryId: name.toLowerCase().includes('vegano') || name.toLowerCase().includes('veg') ? '4' : '1',
+  categoryIds: [name.toLowerCase().includes('vegano') || name.toLowerCase().includes('veg') ? '4' : '1'],
   isActive: true
 }));
 

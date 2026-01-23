@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Bucket, ProductionEntry, DistributionEntry, Notification, StoreName, Flavor, Category, ProductionLog } from '../types';
 import { INITIAL_FLAVORS, INITIAL_CATEGORIES } from '../constants';
-import { db } from '../lib/firebase';
+import { db, isFirebaseConfigured } from '../lib/firebase';
 import { 
   collection, 
   onSnapshot, 
@@ -17,6 +17,7 @@ interface InventoryContextType {
   productionLogs: ProductionLog[];
   notifications: Notification[];
   isSyncing: boolean;
+  isLocalMode: boolean;
   addProduction: (entries: ProductionEntry[], productionDate: Date) => void;
   distributeBuckets: (entry: DistributionEntry) => void;
   updateBucket: (bucket: Bucket) => void;
@@ -28,9 +29,17 @@ interface InventoryContextType {
   dismissNotification: (id: string) => void;
   exportData: () => void;
   importData: (jsonData: string) => void;
+  exportToCSV: () => void;
 }
 
 const InventoryContext = createContext<InventoryContextType | undefined>(undefined);
+
+const LOCAL_STORAGE_KEYS = {
+  BUCKETS: 'lorenza_buckets',
+  FLAVORS: 'lorenza_flavors',
+  CATEGORIES: 'lorenza_categories',
+  LOGS: 'lorenza_logs'
+};
 
 export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [buckets, setBuckets] = useState<Bucket[]>([]);
@@ -38,31 +47,73 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [categories, setCategories] = useState<Category[]>(INITIAL_CATEGORIES);
   const [productionLogs, setProductionLogs] = useState<ProductionLog[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [isSyncing, setIsSyncing] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(isFirebaseConfigured);
 
+  // Carregar dados iniciais (Firebase ou LocalStorage)
   useEffect(() => {
-    const unsubBuckets = onSnapshot(collection(db, "inventory"), (snapshot) => {
-      const data: any[] = [];
-      snapshot.forEach(doc => {
-        if (doc.id === "all_buckets") {
-          data.push(...doc.data().items);
+    if (isFirebaseConfigured && db) {
+      const unsubBuckets = onSnapshot(collection(db, "inventory"), (snapshot) => {
+        const data: any[] = [];
+        snapshot.forEach(doc => {
+          if (doc.id === "all_buckets") {
+            data.push(...doc.data().items);
+          }
+        });
+        const mappedBuckets = data.map(b => ({ ...b, producedAt: new Date(b.producedAt) }));
+        setBuckets(mappedBuckets);
+        localStorage.setItem(LOCAL_STORAGE_KEYS.BUCKETS, JSON.stringify(mappedBuckets));
+        setIsSyncing(false);
+      });
+
+      const unsubMeta = onSnapshot(doc(db, "settings", "main"), (docSnapshot) => {
+        if (docSnapshot.exists()) {
+          const data = docSnapshot.data();
+          if (data.flavors) setFlavors(data.flavors);
+          if (data.categories) setCategories(data.categories);
+          if (data.productionLogs) {
+            const mappedLogs = data.productionLogs.map((l: any) => ({ ...l, date: new Date(l.date) }));
+            setProductionLogs(mappedLogs);
+            localStorage.setItem(LOCAL_STORAGE_KEYS.LOGS, JSON.stringify(mappedLogs));
+          }
         }
       });
-      setBuckets(data.map(b => ({ ...b, producedAt: new Date(b.producedAt) })));
+
+      return () => { unsubBuckets(); unsubMeta(); };
+    } else {
+      // Modo Local
+      const storedBuckets = localStorage.getItem(LOCAL_STORAGE_KEYS.BUCKETS);
+      const storedLogs = localStorage.getItem(LOCAL_STORAGE_KEYS.LOGS);
+      const storedFlavors = localStorage.getItem(LOCAL_STORAGE_KEYS.FLAVORS);
+      const storedCats = localStorage.getItem(LOCAL_STORAGE_KEYS.CATEGORIES);
+
+      if (storedBuckets) setBuckets(JSON.parse(storedBuckets).map((b: any) => ({ ...b, producedAt: new Date(b.producedAt) })));
+      if (storedLogs) setProductionLogs(JSON.parse(storedLogs).map((l: any) => ({ ...l, date: new Date(l.date) })));
+      if (storedFlavors) setFlavors(JSON.parse(storedFlavors));
+      if (storedCats) setCategories(JSON.parse(storedCats));
       setIsSyncing(false);
-    });
-
-    const unsubMeta = onSnapshot(doc(db, "settings", "main"), (doc) => {
-      if (doc.exists()) {
-        const data = doc.data();
-        if (data.flavors) setFlavors(data.flavors);
-        if (data.categories) setCategories(data.categories);
-        if (data.productionLogs) setProductionLogs(data.productionLogs.map((l: any) => ({ ...l, date: new Date(l.date) })));
-      }
-    });
-
-    return () => { unsubBuckets(); unsubMeta(); };
+    }
   }, []);
+
+  const persistData = async (newBuckets: Bucket[], newLogs: ProductionLog[], newFlavors?: Flavor[], newCats?: Category[]) => {
+    // Sempre salvar localmente primeiro
+    localStorage.setItem(LOCAL_STORAGE_KEYS.BUCKETS, JSON.stringify(newBuckets));
+    localStorage.setItem(LOCAL_STORAGE_KEYS.LOGS, JSON.stringify(newLogs));
+    if (newFlavors) localStorage.setItem(LOCAL_STORAGE_KEYS.FLAVORS, JSON.stringify(newFlavors));
+    if (newCats) localStorage.setItem(LOCAL_STORAGE_KEYS.CATEGORIES, JSON.stringify(newCats));
+
+    if (isFirebaseConfigured && db) {
+      try {
+        await setDoc(doc(db, "inventory", "all_buckets"), { items: newBuckets });
+        await updateDoc(doc(db, "settings", "main"), {
+          productionLogs: newLogs,
+          flavors: newFlavors || flavors,
+          categories: newCats || categories
+        });
+      } catch (e) {
+        console.error("Erro ao sincronizar com Firebase:", e);
+      }
+    }
+  };
 
   const addNotification = useCallback((message: string, type: 'info' | 'warning' | 'success' = 'info') => {
     const newNotif: Notification = {
@@ -83,7 +134,6 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const flavor = flavors.find(f => f.id === entry.flavorId);
       const initials = flavor?.initials || 'XXX';
       
-      // Contagem para sequência baseada na data de produção escolhida
       let dailySeq = buckets.filter(b => 
         b.flavorId === entry.flavorId && 
         new Date(b.producedAt).toLocaleDateString() === productionDate.toLocaleDateString()
@@ -116,68 +166,53 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const updatedBuckets = [...buckets, ...newBuckets];
     const updatedLogs = [...newLogs, ...productionLogs];
 
-    try {
-      await setDoc(doc(db, "inventory", "all_buckets"), { items: updatedBuckets });
-      await updateDoc(doc(db, "settings", "main"), {
-        productionLogs: updatedLogs,
-        flavors,
-        categories
-      });
-      addNotification(`Produção registrada para ${productionDate.toLocaleDateString()}.`, 'success');
-    } catch (e) {
-      console.error(e);
-      addNotification("Erro ao salvar produção", "warning");
-    }
+    setBuckets(updatedBuckets);
+    setProductionLogs(updatedLogs);
+    await persistData(updatedBuckets, updatedLogs);
+    addNotification(`Lote registrado para ${productionDate.toLocaleDateString()}.`, 'success');
   };
 
   const updateBucket = async (updatedBucket: Bucket) => {
     const updatedBuckets = buckets.map(b => b.id === updatedBucket.id ? updatedBucket : b);
-    try {
-      await setDoc(doc(db, "inventory", "all_buckets"), { items: updatedBuckets });
-      addNotification("Balde atualizado.", "success");
-    } catch (e) {
-      addNotification("Erro ao atualizar balde.", "warning");
-    }
+    setBuckets(updatedBuckets);
+    await persistData(updatedBuckets, productionLogs);
   };
 
   const deleteBucket = async (id: string) => {
     const updatedBuckets = buckets.filter(b => b.id !== id);
-    try {
-      await setDoc(doc(db, "inventory", "all_buckets"), { items: updatedBuckets });
-      addNotification("Balde removido do estoque.", "info");
-    } catch (e) {
-      addNotification("Erro ao excluir balde.", "warning");
-    }
+    setBuckets(updatedBuckets);
+    await persistData(updatedBuckets, productionLogs);
   };
 
   const distributeBuckets = async (entry: DistributionEntry) => {
     const updatedBuckets = buckets.map(b => entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b);
-    await setDoc(doc(db, "inventory", "all_buckets"), { items: updatedBuckets });
-    addNotification(`Distribuição sincronizada.`, 'info');
+    setBuckets(updatedBuckets);
+    await persistData(updatedBuckets, productionLogs);
+    addNotification(`Distribuição concluída para ${entry.targetStore}.`, 'info');
   };
 
   const updateFlavor = async (updated: Flavor) => {
     const newFlavors = flavors.map(f => f.id === updated.id ? updated : f);
     setFlavors(newFlavors);
-    await updateDoc(doc(db, "settings", "main"), { flavors: newFlavors });
+    await persistData(buckets, productionLogs, newFlavors);
   };
 
   const addCategory = async (name: string) => {
     const newCats = [...categories, { id: Date.now().toString(), name }];
     setCategories(newCats);
-    await updateDoc(doc(db, "settings", "main"), { categories: newCats });
+    await persistData(buckets, productionLogs, flavors, newCats);
   };
 
   const updateCategory = async (updated: Category) => {
     const newCats = categories.map(c => c.id === updated.id ? updated : c);
     setCategories(newCats);
-    await updateDoc(doc(db, "settings", "main"), { categories: newCats });
+    await persistData(buckets, productionLogs, flavors, newCats);
   };
 
   const deleteCategory = async (id: string) => {
     const newCats = categories.filter(c => c.id !== id);
     setCategories(newCats);
-    await updateDoc(doc(db, "settings", "main"), { categories: newCats });
+    await persistData(buckets, productionLogs, flavors, newCats);
   };
 
   const dismissNotification = (id: string) => setNotifications(prev => prev.filter(n => n.id !== id));
@@ -188,27 +223,49 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `gelatoflow_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `lorenza_backup_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
+  };
+
+  const exportToCSV = () => {
+    let csv = "Data,Sabor,Quantidade,Peso Total (g),Local,Observacao\n";
+    productionLogs.forEach(log => {
+      const flavor = flavors.find(f => f.id === log.flavorId)?.name || "Desconhecido";
+      csv += `${log.date.toLocaleDateString()},${flavor},${log.bucketCount},${log.totalGrams},Fábrica,${log.note || ""}\n`;
+    });
+    
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `relatorio_lorenza_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const importData = async (jsonData: string) => {
     try {
       const data = JSON.parse(jsonData);
-      await setDoc(doc(db, "inventory", "all_buckets"), { items: data.buckets });
-      await setDoc(doc(db, "settings", "main"), {
-        flavors: data.flavors,
-        categories: data.categories,
-        productionLogs: data.productionLogs
-      });
-      addNotification("Dados importados para a nuvem!", "success");
-    } catch (e) { addNotification("Erro na importação.", "warning"); }
+      const importedBuckets = data.buckets.map((b: any) => ({ ...b, producedAt: new Date(b.producedAt) }));
+      const importedLogs = data.productionLogs.map((l: any) => ({ ...l, date: new Date(l.date) }));
+      
+      setBuckets(importedBuckets);
+      setFlavors(data.flavors);
+      setCategories(data.categories);
+      setProductionLogs(importedLogs);
+      
+      await persistData(importedBuckets, importedLogs, data.flavors, data.categories);
+      addNotification("Dados restaurados com sucesso!", "success");
+    } catch (e) { addNotification("Erro na restauração.", "warning"); }
   };
 
   return (
     <InventoryContext.Provider value={{ 
-      buckets, flavors, categories, productionLogs, notifications, isSyncing, addProduction, distributeBuckets, 
-      updateBucket, deleteBucket, updateFlavor, addCategory, updateCategory, deleteCategory, dismissNotification, exportData, importData 
+      buckets, flavors, categories, productionLogs, notifications, isSyncing, isLocalMode: !isFirebaseConfigured, 
+      addProduction, distributeBuckets, updateBucket, deleteBucket, updateFlavor, addCategory, updateCategory, 
+      deleteCategory, dismissNotification, exportData, importData, exportToCSV 
     }}>
       {children}
     </InventoryContext.Provider>

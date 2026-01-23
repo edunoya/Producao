@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { useInventory } from '../store/InventoryContext';
 import { STORES } from '../constants';
@@ -16,7 +17,8 @@ const InventoryList: React.FC = () => {
 
   const filteredBuckets = buckets.filter(b => {
     const flavor = flavors.find(f => f.id === b.flavorId);
-    const category = categories.find(c => c.id === flavor?.categoryId);
+    // Fixed: Changed from flavor.categoryId to flavor.categoryIds[0] to match updated Flavor interface
+    const category = categories.find(c => c.id === flavor?.categoryIds?.[0]);
     const matchesStore = filterStore === 'Todos' || b.location === filterStore;
     const matchesCategory = filterCategory === 'Todos' || category?.id === filterCategory;
     const matchesSearch = flavor?.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -134,7 +136,8 @@ const InventoryList: React.FC = () => {
                 filteredBuckets.map(b => {
                   const isEditing = editingId === b.id;
                   const flavor = flavors.find(f => f.id === b.flavorId);
-                  const category = categories.find(c => c.id === flavor?.categoryId);
+                  // Fixed: Changed from flavor.categoryId to flavor.categoryIds[0]
+                  const category = categories.find(c => c.id === flavor?.categoryIds?.[0]);
 
                   return (
                     <tr key={b.id} className={`hover:bg-gray-50/50 transition-colors ${isEditing ? 'bg-rose-50/30' : ''}`}>

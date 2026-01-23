@@ -1,4 +1,3 @@
-
 export type StoreName = 'Fábrica' | 'Campo Duna' | 'Casa Kimo' | 'Rosa';
 
 export interface Category {
@@ -10,7 +9,7 @@ export interface Flavor {
   id: string;
   name: string;
   initials: string;
-  categoryId: string;
+  categoryIds: string[]; // Mudança para array
   description?: string;
   isActive: boolean;
 }
