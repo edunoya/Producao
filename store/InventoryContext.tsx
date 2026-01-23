@@ -120,7 +120,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           categories: newCats || categories
         });
       } catch (e) {
-        console.error("Erro ao sincronizar com Firebase:", e);
+        console.error("Erro ao sincronizar:", e);
       }
     }
   };
@@ -163,6 +163,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         dailySeq++;
       });
 
+      // O LOG DE PRODUÇÃO É HISTÓRICO E NUNCA MUDA
       newLogs.push({
         id: Math.random().toString(36).substr(2, 9),
         flavorId: entry.flavorId,
@@ -179,23 +180,25 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setBuckets(updatedBuckets);
     setProductionLogs(updatedLogs);
     await persistData(updatedBuckets, updatedLogs, storeClosingLogs);
-    addNotification(`Lote registrado para ${productionDate.toLocaleDateString()}.`, 'success');
+    addNotification(`Produção registrada! Log histórico criado.`, 'success');
   };
 
   const updateBucket = async (updatedBucket: Bucket) => {
+    // Atualiza apenas o estoque ativo. Logs de produção permanecem inalterados.
     const updatedBuckets = buckets.map(b => b.id === updatedBucket.id ? updatedBucket : b);
     setBuckets(updatedBuckets);
     await persistData(updatedBuckets, productionLogs, storeClosingLogs);
   };
 
   const deleteBucket = async (id: string) => {
+    // Remove do estoque, mas o ProductionLog correspondente continua existindo.
     const updatedBuckets = buckets.filter(b => b.id !== id);
     setBuckets(updatedBuckets);
     await persistData(updatedBuckets, productionLogs, storeClosingLogs);
   };
 
   const saveStoreClosing = async (storeName: StoreName, closingBuckets: Bucket[]) => {
-    // 1. Criar Log de Fechamento
+    // 1. Log de fechamento para histórico de vendas da loja
     const newClosingLog: StoreClosingLog = {
       id: Math.random().toString(36).substr(2, 9),
       storeName,
@@ -204,33 +207,33 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       items: closingBuckets.map(b => ({ flavorId: b.flavorId, grams: b.grams }))
     };
 
-    // 2. Atualizar buckets no estoque global (remover vazios ou atualizar pesos)
-    // Aqueles que não estão na lista de fechamento mas eram daquela loja, foram 'vendidos'
-    const closingBucketIds = closingBuckets.map(b => b.id);
+    // 2. Atualiza os buckets reais. Se não está na lista de fechamento, foi vendido.
     const updatedBuckets = buckets.map(b => {
       if (b.location === storeName) {
-        const updated = closingBuckets.find(cb => cb.id === b.id);
-        if (updated) {
-          return { ...b, grams: updated.grams };
+        const foundInClosing = closingBuckets.find(cb => cb.id === b.id);
+        if (foundInClosing) {
+          // Atualiza apenas o peso atual no inventário
+          return { ...b, grams: foundInClosing.grams };
         } else {
+          // Balde acabou
           return { ...b, status: 'vendido' as const };
         }
       }
       return b;
-    }).filter(b => b.status === 'estoque'); // Mantemos apenas o que é estoque real
+    }).filter(b => b.status === 'estoque');
 
     const newClosingLogs = [newClosingLog, ...storeClosingLogs];
     setBuckets(updatedBuckets);
     setStoreClosingLogs(newClosingLogs);
     await persistData(updatedBuckets, productionLogs, newClosingLogs);
-    addNotification(`Fechamento da loja ${storeName} concluído.`, 'success');
+    addNotification(`Fechamento ${storeName} concluído e sincronizado.`, 'success');
   };
 
   const distributeBuckets = async (entry: DistributionEntry) => {
     const updatedBuckets = buckets.map(b => entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b);
     setBuckets(updatedBuckets);
     await persistData(updatedBuckets, productionLogs, storeClosingLogs);
-    addNotification(`Distribuição concluída para ${entry.targetStore}.`, 'info');
+    addNotification(`Baldes movidos para ${entry.targetStore}.`, 'info');
   };
 
   const updateFlavor = async (updated: Flavor) => {
@@ -265,18 +268,18 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `lorenza_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `lorenza_full_backup_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
   };
 
   const exportToCSV = () => {
-    let csv = "Tipo,Data,Entidade,Quantidade/Peso,Info Extra\n";
+    let csv = "Tipo,Data,Entidade,Quantidade/Peso Original,Info Extra\n";
     productionLogs.forEach(log => {
       const flavor = flavors.find(f => f.id === log.flavorId)?.name || "Desconhecido";
-      csv += `PRODUÇÃO,${log.date.toLocaleDateString()},${flavor},${log.totalGrams}g,${log.bucketCount} baldes\n`;
+      csv += `PRODUCAO_FABRICA,${log.date.toLocaleDateString()},${flavor},${log.totalGrams}g,${log.bucketCount} baldes\n`;
     });
     storeClosingLogs.forEach(log => {
-      csv += `FECHAMENTO LOJA,${log.date.toLocaleDateString()},${log.storeName},${log.totalKg.toFixed(1)}kg,${log.items.length} itens\n`;
+      csv += `FECHAMENTO_LOJA,${log.date.toLocaleDateString()},${log.storeName},${log.totalKg.toFixed(1)}kg,${log.items.length} itens\n`;
     });
     
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -304,8 +307,8 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setStoreClosingLogs(importedClosing);
       
       await persistData(importedBuckets, importedLogs, importedClosing, data.flavors, data.categories);
-      addNotification("Dados restaurados com sucesso!", "success");
-    } catch (e) { addNotification("Erro na restauração.", "warning"); }
+      addNotification("Backup restaurado!", "success");
+    } catch (e) { addNotification("Falha ao importar.", "warning"); }
   };
 
   return (
