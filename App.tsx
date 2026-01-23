@@ -22,17 +22,19 @@ const App: React.FC = () => {
     <Suspense fallback={<LoadingFallback />}>
       <HashRouter>
         <InventoryProvider>
-          <Layout>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/producao" element={<ProductionForm />} />
-              <Route path="/distribuicao" element={<DistributionForm />} />
-              <Route path="/estoque" element={<InventoryList />} />
-              <Route path="/configuracoes" element={<Settings />} />
-              <Route path="/relatorios" element={<Reports />} />
-              <Route path="*" element={<Dashboard />} />
-            </Routes>
-          </Layout>
+          <Routes>
+            {/* Rota especial para Loja (sem layout padrão) */}
+            <Route path="/loja/:storeName" element={<InventoryList standalone={true} />} />
+            
+            {/* Rotas com Layout Administrativo */}
+            <Route path="/" element={<Layout><Dashboard /></Layout>} />
+            <Route path="/producao" element={<Layout><ProductionForm /></Layout>} />
+            <Route path="/distribuicao" element={<Layout><DistributionForm /></Layout>} />
+            <Route path="/estoque" element={<Layout><InventoryList /></Layout>} />
+            <Route path="/configuracoes" element={<Layout><Settings /></Layout>} />
+            <Route path="/relatorios" element={<Layout><Reports /></Layout>} />
+            <Route path="*" element={<Layout><Dashboard /></Layout>} />
+          </Routes>
         </InventoryProvider>
       </HashRouter>
     </Suspense>

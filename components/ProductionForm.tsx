@@ -1,47 +1,113 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useInventory } from '../store/InventoryContext';
-import { Plus, Trash2, Save, Calendar, Search, History, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, Save, Calendar, Search, History, ChevronDown } from 'lucide-react';
 import { ProductionEntry, Flavor } from '../types';
 
-const ProductionForm: React.FC = () => {
-  const { addProduction, flavors, categories, productionLogs } = useInventory();
-  const [productionDate, setProductionDate] = useState(new Date().toISOString().split('T')[0]);
-  const [entries, setEntries] = useState<ProductionEntry[]>(() => [
-    { flavorId: flavors.filter(f => f.isActive)[0]?.id || '', weights: [5000], note: '' }
-  ]);
-  const [flavorSearch, setFlavorSearch] = useState('');
+const SearchableFlavorSelect: React.FC<{
+  value: string;
+  onChange: (id: string) => void;
+  flavors: Flavor[];
+}> = ({ value, onChange, flavors }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
+  const selectedFlavor = flavors.find(f => f.id === value);
+
+  const filtered = useMemo(() => {
+    return flavors.filter(f => 
+      f.name.toLowerCase().includes(search.toLowerCase()) || 
+      f.initials.toLowerCase().includes(search.toLowerCase())
+    );
+  }, [flavors, search]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className="relative" ref={wrapperRef}>
+      <div 
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full bg-white border border-fuchsia-100 rounded-xl px-4 py-3 text-sm font-semibold flex justify-between items-center cursor-pointer hover:border-fuchsia-200 transition-colors"
+      >
+        <span className={selectedFlavor ? 'text-gray-800' : 'text-gray-400'}>
+          {selectedFlavor ? selectedFlavor.name : 'Selecione o sabor...'}
+        </span>
+        <ChevronDown size={16} className={`text-fuchsia-300 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </div>
+
+      {isOpen && (
+        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-fuchsia-100 rounded-xl shadow-2xl p-2 animate-in fade-in slide-in-from-top-2">
+          <div className="relative mb-2">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-fuchsia-300" />
+            <input 
+              autoFocus
+              type="text" 
+              placeholder="Digite para buscar..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full bg-fuchsia-50/50 rounded-lg pl-9 pr-4 py-2 text-xs outline-none font-bold text-gray-700"
+            />
+          </div>
+          <div className="max-h-60 overflow-y-auto custom-scrollbar">
+            {filtered.length > 0 ? filtered.map(f => (
+              <div 
+                key={f.id}
+                onClick={() => {
+                  onChange(f.id);
+                  setIsOpen(false);
+                  setSearch('');
+                }}
+                className="flex items-center justify-between px-3 py-2 hover:bg-fuchsia-50 rounded-lg cursor-pointer transition-colors"
+              >
+                <span className="text-xs font-bold text-gray-700">{f.name}</span>
+                <span className="text-[10px] font-mono text-fuchsia-300 bg-fuchsia-50 px-1.5 py-0.5 rounded">{f.initials}</span>
+              </div>
+            )) : (
+              <div className="text-center py-4 text-xs text-gray-300 italic">Sabor não encontrado</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ProductionForm: React.FC = () => {
+  const { addProduction, flavors, productionLogs } = useInventory();
+  const [productionDate, setProductionDate] = useState(new Date().toISOString().split('T')[0]);
+  
   const activeFlavors = useMemo(() => {
     return flavors
       .filter(f => f.isActive)
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [flavors]);
 
-  // Fixed: Added explicit return type to useMemo to ensure groupedFlavors is not treated as unknown
-  const groupedFlavors = useMemo((): Record<string, Flavor[]> => {
-    const groups: Record<string, Flavor[]> = {};
-    activeFlavors.forEach(f => {
-      // Usamos a primeira categoria como principal para agrupamento na UI
-      const catId = f.categoryIds[0] || 'uncategorized';
-      const catName = categories.find(c => c.id === catId)?.name || 'Sem Categoria';
-      if (!groups[catName]) groups[catName] = [];
-      groups[catName].push(f);
-    });
-    return groups;
-  }, [activeFlavors, categories]);
+  // Iniciamos com peso 0 para forçar a digitação do peso real
+  const [entries, setEntries] = useState<ProductionEntry[]>(() => [
+    { flavorId: activeFlavors[0]?.id || '', weights: [0], note: '' }
+  ]);
 
   const addRow = () => {
-    setEntries([...entries, { flavorId: activeFlavors[0]?.id || '', weights: [5000], note: '' }]);
+    setEntries([...entries, { flavorId: activeFlavors[0]?.id || '', weights: [0], note: '' }]);
   };
 
   const removeRow = (index: number) => {
     if (entries.length > 1) setEntries(entries.filter((_, i) => i !== index));
   };
 
-  const updateWeight = (entryIndex: number, weightIndex: number, value: number) => {
+  const updateWeight = (entryIndex: number, weightIndex: number, value: string) => {
+    const numValue = value === '' ? 0 : Number(value);
     const newEntries = [...entries];
-    newEntries[entryIndex].weights[weightIndex] = value;
+    newEntries[entryIndex].weights[weightIndex] = numValue;
     setEntries(newEntries);
   };
 
@@ -53,10 +119,18 @@ const ProductionForm: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Validação básica
+    const hasInvalidWeights = entries.some(e => e.weights.some(w => w <= 0));
+    if (hasInvalidWeights) {
+      alert("Por favor, preencha todos os pesos dos baldes corretamente.");
+      return;
+    }
+
     const dateObj = new Date(productionDate);
     dateObj.setMinutes(dateObj.getMinutes() + dateObj.getTimezoneOffset());
     addProduction(entries, dateObj);
-    setEntries([{ flavorId: activeFlavors[0]?.id || '', weights: [5000], note: '' }]);
+    setEntries([{ flavorId: activeFlavors[0]?.id || '', weights: [0], note: '' }]);
   };
 
   return (
@@ -84,18 +158,11 @@ const ProductionForm: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
                 <div className="relative">
                   <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1.5 ml-1">Sabor Batido</label>
-                  <select
+                  <SearchableFlavorSelect 
                     value={entry.flavorId}
-                    onChange={(e) => updateEntryField(entryIndex, 'flavorId', e.target.value)}
-                    className="w-full bg-white border border-fuchsia-100 rounded-xl px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-fuchsia-200"
-                  >
-                    {/* Fixed: Explicitly typed the entries to avoid unknown type errors in the map function */}
-                    {(Object.entries(groupedFlavors) as [string, Flavor[]][]).map(([cat, flavorList]) => (
-                      <optgroup key={cat} label={cat.toUpperCase()}>
-                        {flavorList.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                      </optgroup>
-                    ))}
-                  </select>
+                    onChange={(id) => updateEntryField(entryIndex, 'flavorId', id)}
+                    flavors={activeFlavors}
+                  />
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1.5 ml-1">Nota do Lote</label>
@@ -103,7 +170,7 @@ const ProductionForm: React.FC = () => {
                     type="text"
                     value={entry.note}
                     onChange={(e) => updateEntryField(entryIndex, 'note', e.target.value)}
-                    placeholder="Opcional: ex: Leite novo, maturação extra..."
+                    placeholder="Opcional: ex: Leite novo..."
                     className="w-full bg-white border border-fuchsia-100 rounded-xl px-4 py-3 text-sm outline-none"
                   />
                 </div>
@@ -116,9 +183,10 @@ const ProductionForm: React.FC = () => {
                     <div key={weightIndex} className="flex items-center bg-white border border-fuchsia-100 rounded-xl px-2 py-1 shadow-sm">
                       <input
                         type="number"
-                        value={w}
-                        onChange={(e) => updateWeight(entryIndex, weightIndex, Number(e.target.value))}
-                        className="w-20 border-none bg-transparent px-2 text-sm font-bold text-fuchsia-700 outline-none"
+                        placeholder="Peso (g)"
+                        value={w === 0 ? '' : w}
+                        onChange={(e) => updateWeight(entryIndex, weightIndex, e.target.value)}
+                        className="w-24 border-none bg-transparent px-2 text-sm font-black text-fuchsia-700 outline-none placeholder:font-normal placeholder:text-gray-300"
                       />
                       <button 
                         type="button" 
@@ -138,7 +206,7 @@ const ProductionForm: React.FC = () => {
                     type="button" 
                     onClick={() => {
                       const newEntries = [...entries];
-                      newEntries[entryIndex].weights.push(5000);
+                      newEntries[entryIndex].weights.push(0);
                       setEntries(newEntries);
                     }}
                     className="flex items-center gap-1.5 px-4 py-2 bg-fuchsia-100 text-fuchsia-600 rounded-xl text-[10px] font-black uppercase hover:bg-fuchsia-200 transition-all"

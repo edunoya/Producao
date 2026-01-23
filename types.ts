@@ -9,7 +9,7 @@ export interface Flavor {
   id: string;
   name: string;
   initials: string;
-  categoryIds: string[]; // Mudança para array
+  categoryIds: string[];
   description?: string;
   isActive: boolean;
 }
@@ -32,6 +32,17 @@ export interface ProductionLog {
   bucketCount: number;
   date: Date;
   note?: string;
+}
+
+export interface StoreClosingLog {
+  id: string;
+  storeName: StoreName;
+  date: Date;
+  totalKg: number;
+  items: {
+    flavorId: string;
+    grams: number;
+  }[];
 }
 
 export interface ProductionEntry {
