@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Bucket, ProductionEntry, DistributionEntry, Flavor, Category, ProductionLog, StoreClosingLog, StoreName } from '../types';
 import { INITIAL_FLAVORS, INITIAL_CATEGORIES } from '../constants';
 import { db, isFirebaseConfigured } from '../lib/firebase';
@@ -13,13 +13,13 @@ interface InventoryContextType {
   storeClosingLogs: StoreClosingLog[];
   isSyncing: boolean;
   isInitialLoad: boolean;
-  addProduction: (entries: ProductionEntry[], date: Date) => Promise<void>;
+  addProductionBatch: (entries: ProductionEntry[], note: string, date: Date) => Promise<void>;
   distributeBuckets: (entry: DistributionEntry) => Promise<void>;
   saveStoreClosing: (store: StoreName, closingBuckets: Bucket[]) => Promise<void>;
+  markAsSold: (bucketId: string) => Promise<void>;
   deleteBucket: (id: string) => Promise<void>;
   updateFlavor: (f: Flavor) => Promise<void>;
   addCategory: (name: string) => Promise<void>;
-  deleteCategory: (id: string) => Promise<void>;
   exportToCSV: () => void;
   resetDatabase: () => Promise<void>;
 }
@@ -45,11 +45,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const unsub = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        const toDate = (val: any) => {
-          if (!val) return new Date();
-          if (val instanceof Timestamp) return val.toDate();
-          return new Date(val);
-        };
+        const toDate = (val: any) => val instanceof Timestamp ? val.toDate() : new Date(val || Date.now());
 
         setBuckets((data.buckets || []).map((b: any) => ({ ...b, producedAt: toDate(b.producedAt) })));
         if (data.flavors) setFlavors(data.flavors);
@@ -67,8 +63,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (!db) return false;
     setIsSyncing(true);
     try {
-      const docRef = doc(db, "inventory", "main");
-      await updateDoc(docRef, { ...updates, lastUpdated: new Date().toISOString() });
+      await updateDoc(doc(db, "inventory", "main"), { ...updates, lastUpdated: new Date().toISOString() });
       return true;
     } catch (e) {
       console.error("Erro persistência:", e);
@@ -78,13 +73,14 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
-  const addProduction = async (entries: ProductionEntry[], date: Date) => {
+  const addProductionBatch = async (entries: ProductionEntry[], note: string, date: Date) => {
     const newBuckets: Bucket[] = [];
-    const newLogs: ProductionLog[] = [];
+    const logEntries: any[] = [];
     
     entries.forEach(entry => {
       const flavor = flavors.find(f => f.id === entry.flavorId);
       let seq = buckets.filter(b => b.flavorId === entry.flavorId).length + 1;
+      
       entry.weights.forEach(w => {
         newBuckets.push({
           id: `${flavor?.initials || 'G'}-${Date.now().toString().slice(-4)}-${seq++}`,
@@ -96,28 +92,37 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           sequence: seq
         });
       });
-      newLogs.push({
-        id: Math.random().toString(36).slice(2),
+
+      logEntries.push({
         flavorId: entry.flavorId,
         totalGrams: entry.weights.reduce((a, b) => a + Number(b), 0),
-        bucketCount: entry.weights.length,
-        date: date
+        bucketCount: entry.weights.length
       });
     });
 
+    const newLog: ProductionLog = {
+      id: Math.random().toString(36).slice(2),
+      batchNote: note,
+      entries: logEntries,
+      date: date
+    };
+
     await persist({ 
       buckets: [...buckets, ...newBuckets], 
-      productionLogs: [...newLogs, ...productionLogs] 
+      productionLogs: [newLog, ...productionLogs] 
     });
   };
 
   const distributeBuckets = async (entry: DistributionEntry) => {
-    // Busca o estado mais atualizado antes de enviar
     const updated = buckets.map(b => 
       entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b
     );
-    const success = await persist({ buckets: updated });
-    if (!success) throw new Error("Erro ao distribuir");
+    await persist({ buckets: updated });
+  };
+
+  const markAsSold = async (bucketId: string) => {
+    const updated = buckets.map(b => b.id === bucketId ? { ...b, status: 'vendido' as const } : b);
+    await persist({ buckets: updated });
   };
 
   const saveStoreClosing = async (store: StoreName, closingBuckets: Bucket[]) => {
@@ -152,28 +157,28 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     await persist({ categories: [...categories, { id: Date.now().toString(), name }] });
   };
 
-  const deleteCategory = async (id: string) => {
-    await persist({ categories: categories.filter(c => c.id !== id) });
-  };
-
   const resetDatabase = async () => {
-    if (!window.confirm("Deseja zerar tudo?")) return;
+    if (!window.confirm("Zerar tudo?")) return;
     await persist({ buckets: [], productionLogs: [], storeClosingLogs: [], flavors: INITIAL_FLAVORS, categories: INITIAL_CATEGORIES });
   };
 
   const exportToCSV = () => {
-    let csv = "Data,Evento,Loja,Sabor,Valor\n";
-    productionLogs.forEach(l => csv += `${l.date.toLocaleDateString()},Producao,Fabrica,${flavors.find(fl => fl.id === l.flavorId)?.name},${l.totalGrams}g\n`);
+    let csv = "Data,Lote,Sabor,Grams,Volumes\n";
+    productionLogs.forEach(l => {
+      l.entries.forEach(e => {
+        csv += `${l.date.toLocaleDateString()},${l.batchNote || ''},${flavors.find(f => f.id === e.flavorId)?.name},${e.totalGrams},${e.bucketCount}\n`;
+      });
+    });
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `Lorenza_${Date.now()}.csv`; a.click();
+    const a = document.createElement('a'); a.href = url; a.download = `Lorenza_Relatorio.csv`; a.click();
   };
 
   return (
     <InventoryContext.Provider value={{ 
       buckets, flavors, categories, productionLogs, storeClosingLogs, isSyncing, isInitialLoad,
-      addProduction, distributeBuckets, saveStoreClosing, deleteBucket, updateFlavor, addCategory, 
-      deleteCategory, exportToCSV, resetDatabase
+      addProductionBatch, distributeBuckets, saveStoreClosing, markAsSold, deleteBucket, updateFlavor, addCategory, 
+      exportToCSV, resetDatabase
     }}>
       {children}
     </InventoryContext.Provider>
@@ -182,6 +187,6 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
 export const useInventory = () => {
   const ctx = useContext(InventoryContext);
-  if (!ctx) throw new Error('useInventory missing provider');
+  if (!ctx) throw new Error('InventoryProvider missing');
   return ctx;
 };

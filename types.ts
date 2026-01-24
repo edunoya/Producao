@@ -1,3 +1,4 @@
+
 export type StoreName = 'Fábrica' | 'Campo Duna' | 'Casa Kimo' | 'Rosa';
 
 export interface Category {
@@ -27,11 +28,13 @@ export interface Bucket {
 
 export interface ProductionLog {
   id: string;
-  flavorId: string;
-  totalGrams: number;
-  bucketCount: number;
+  batchNote?: string;
+  entries: {
+    flavorId: string;
+    totalGrams: number;
+    bucketCount: number;
+  }[];
   date: Date;
-  note?: string;
 }
 
 export interface StoreClosingLog {
@@ -48,17 +51,9 @@ export interface StoreClosingLog {
 export interface ProductionEntry {
   flavorId: string;
   weights: number[];
-  note: string;
 }
 
 export interface DistributionEntry {
   targetStore: StoreName;
   bucketIds: string[];
-}
-
-export interface Notification {
-  id: string;
-  message: string;
-  type: 'info' | 'warning' | 'success';
-  timestamp: Date;
 }
