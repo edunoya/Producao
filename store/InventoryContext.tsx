@@ -3,7 +3,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { Bucket, ProductionEntry, DistributionEntry, Flavor, Category, ProductionLog, StoreClosingLog, StoreName } from '../types';
 import { INITIAL_FLAVORS, INITIAL_CATEGORIES } from '../constants';
 import { db, isFirebaseConfigured } from '../lib/firebase';
-import { onSnapshot, setDoc, doc, updateDoc, getDoc } from 'firebase/firestore';
+import { onSnapshot, setDoc, doc, updateDoc, getDoc, Timestamp } from 'firebase/firestore';
 
 interface InventoryContextType {
   buckets: Bucket[];
@@ -35,24 +35,52 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [isSyncing, setIsSyncing] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-  // Inicializa ou Escuta o Firebase
+  // Listener em tempo real
   useEffect(() => {
     if (!isFirebaseConfigured || !db) {
+      console.warn("Firebase não configurado ou DB não inicializado.");
       setIsInitialLoad(false);
       return;
     }
 
-    const unsub = onSnapshot(doc(db, "inventory", "main"), (snap) => {
+    const docRef = doc(db, "inventory", "main");
+    
+    const unsub = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        setBuckets((data.buckets || []).map((b: any) => ({ ...b, producedAt: new Date(b.producedAt) })));
+        
+        // Função auxiliar para converter timestamps do Firebase para objetos Date
+        const toDate = (val: any) => {
+          if (!val) return new Date();
+          if (val instanceof Timestamp) return val.toDate();
+          if (typeof val === 'string' || typeof val === 'number') return new Date(val);
+          return new Date();
+        };
+
+        setBuckets((data.buckets || []).map((b: any) => ({ 
+          ...b, 
+          producedAt: toDate(b.producedAt) 
+        })));
+        
         if (data.flavors) setFlavors(data.flavors);
         if (data.categories) setCategories(data.categories);
-        if (data.productionLogs) setProductionLogs(data.productionLogs.map((l: any) => ({ ...l, date: new Date(l.date) })));
-        if (data.storeClosingLogs) setStoreClosingLogs(data.storeClosingLogs.map((l: any) => ({ ...l, date: new Date(l.date) })));
+        
+        if (data.productionLogs) {
+          setProductionLogs(data.productionLogs.map((l: any) => ({ 
+            ...l, 
+            date: toDate(l.date) 
+          })));
+        }
+        
+        if (data.storeClosingLogs) {
+          setStoreClosingLogs(data.storeClosingLogs.map((l: any) => ({ 
+            ...l, 
+            date: toDate(l.date) 
+          })));
+        }
       } else {
-        // Inicializa documento se não existir
-        setDoc(doc(db, "inventory", "main"), {
+        console.log("Criando documento inicial no Firestore...");
+        setDoc(docRef, {
           buckets: [],
           flavors: INITIAL_FLAVORS,
           categories: INITIAL_CATEGORIES,
@@ -71,22 +99,44 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, []);
 
   const persist = async (updates: any) => {
-    if (!db) return;
+    if (!db) {
+      console.error("Tentativa de salvar sem conexão com Banco de Dados.");
+      alert("Erro: Sem conexão com o Banco de Dados. Verifique as configurações do Firebase.");
+      return;
+    }
+    
     setIsSyncing(true);
     try {
-      await updateDoc(doc(db, "inventory", "main"), {
+      const docRef = doc(db, "inventory", "main");
+      await updateDoc(docRef, {
         ...updates,
         lastUpdated: new Date().toISOString()
       });
-    } catch (e) {
-      console.error("Falha ao persistir:", e);
+      return true;
+    } catch (e: any) {
+      console.error("Falha ao persistir no Firebase:", e);
+      // Se o erro for que o documento não existe, tenta criar com setDoc
+      if (e.code === 'not-found') {
+        try {
+          await setDoc(doc(db, "inventory", "main"), {
+            buckets, flavors, categories, productionLogs, storeClosingLogs,
+            ...updates,
+            lastUpdated: new Date().toISOString()
+          });
+          return true;
+        } catch (innerError) {
+          console.error("Erro fatal ao criar documento:", innerError);
+        }
+      }
+      alert("Erro ao salvar no banco de dados. Verifique sua conexão.");
+      return false;
     } finally {
       setIsSyncing(false);
     }
   };
 
   const resetDatabase = async () => {
-    if (!window.confirm("Isso apagará TODO o estoque e logs. Confirmar?")) return;
+    if (!window.confirm("⚠️ ATENÇÃO: Isso apagará TODO o estoque e logs históricos. Deseja continuar?")) return;
     await persist({
       buckets: [],
       productionLogs: [],
@@ -108,7 +158,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         newBuckets.push({
           id: `${flavor?.initials || 'G'}-${Date.now().toString().slice(-4)}-${seq++}`,
           flavorId: entry.flavorId,
-          grams: w,
+          grams: Number(w),
           producedAt: date,
           location: 'Fábrica',
           status: 'estoque',
@@ -119,30 +169,38 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       newLogs.push({
         id: Math.random().toString(36).slice(2),
         flavorId: entry.flavorId,
-        totalGrams: entry.weights.reduce((a, b) => a + b, 0),
+        totalGrams: entry.weights.reduce((a, b) => a + Number(b), 0),
         bucketCount: entry.weights.length,
         date: date
       });
     });
 
+    const updatedBuckets = [...buckets, ...newBuckets];
+    const updatedLogs = [...newLogs, ...productionLogs];
+    
     await persist({ 
-      buckets: [...buckets, ...newBuckets], 
-      productionLogs: [...newLogs, ...productionLogs] 
+      buckets: updatedBuckets, 
+      productionLogs: updatedLogs 
     });
   };
 
   const distributeBuckets = async (entry: DistributionEntry) => {
+    // Crucial: Use o estado mais recente de buckets
     const updated = buckets.map(b => 
       entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b
     );
-    await persist({ buckets: updated });
+    
+    const success = await persist({ buckets: updated });
+    if (!success) {
+      throw new Error("Falha ao distribuir baldes.");
+    }
   };
 
   const saveStoreClosing = async (store: StoreName, closingBuckets: Bucket[]) => {
     const updated = buckets.map(b => {
       if (b.location === store && b.status === 'estoque') {
         const found = closingBuckets.find(cb => cb.id === b.id);
-        return found ? { ...b, grams: found.grams } : { ...b, status: 'vendido' as const };
+        return found ? { ...b, grams: Number(found.grams) } : { ...b, status: 'vendido' as const };
       }
       return b;
     });
@@ -151,11 +209,14 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       id: Math.random().toString(36).slice(2),
       storeName: store,
       date: new Date(),
-      totalKg: closingBuckets.reduce((a, b) => a + b.grams, 0) / 1000,
-      items: closingBuckets.map(b => ({ flavorId: b.flavorId, grams: b.grams }))
+      totalKg: closingBuckets.reduce((a, b) => a + Number(b.grams), 0) / 1000,
+      items: closingBuckets.map(b => ({ flavorId: b.flavorId, grams: Number(b.grams) }))
     };
 
-    await persist({ buckets: updated, storeClosingLogs: [log, ...storeClosingLogs] });
+    await persist({ 
+      buckets: updated, 
+      storeClosingLogs: [log, ...storeClosingLogs] 
+    });
   };
 
   const deleteBucket = async (id: string) => {
