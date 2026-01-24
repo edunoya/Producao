@@ -1,14 +1,15 @@
+
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
-  // Carrega variáveis de ambiente (VITE_ e outras)
+  // Load environment variables (VITE_ and others)
   const env = loadEnv(mode, (process as any).cwd(), '');
   
   return {
     plugins: [react()],
     define: {
-      // Injeção explícita com fallback para string vazia
+      // Explicit injection with empty string fallback
       'process.env.API_KEY': JSON.stringify(env.API_KEY || ""),
       'process.env.VITE_FIREBASE_API_KEY': JSON.stringify(env.VITE_FIREBASE_API_KEY || ""),
       'process.env.VITE_FIREBASE_AUTH_DOMAIN': JSON.stringify(env.VITE_FIREBASE_AUTH_DOMAIN || ""),
@@ -19,7 +20,9 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: 'dist',
-      sourcemap: false, // Importante: evita o uso de eval em arquivos .map que causa erro de CSP
+      // CRITICAL: Disabling sourcemaps prevents Vite from generating files that might trigger
+      // CSP unsafe-eval errors in environments where eval() is blocked.
+      sourcemap: false, 
       minify: 'esbuild',
       rollupOptions: {
         input: {
