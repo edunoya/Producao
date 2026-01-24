@@ -1,7 +1,7 @@
 {
-  "name": "Gelato Flow",
-  "short_name": "GelatoFlow",
-  "description": "Controle de estoque e distribuição de gelato.",
+  "name": "Controle Lorenza",
+  "short_name": "Lorenza",
+  "description": "Controle profissional de produção e estoque de gelato artesanal.",
   "icons": [
     {
       "src": "https://cdn-icons-png.flaticon.com/512/938/938063.png",
@@ -12,7 +12,7 @@
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#FB7185",
-  "background_color": "#fcfaf7",
+  "theme_color": "#D946EF",
+  "background_color": "#FFFDF5",
   "requestFramePermissions": []
 }

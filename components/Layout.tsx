@@ -3,7 +3,7 @@ import React from 'react';
 import { useLocation, Link } from 'react-router-dom';
 import { 
   LayoutDashboard, ChefHat, Truck, ClipboardList, 
-  Settings, BarChart3, Wifi, WifiOff, RefreshCw 
+  Settings, BarChart3, RefreshCw, Wifi, WifiOff 
 } from 'lucide-react';
 import { useInventory } from '../store/InventoryContext';
 
@@ -23,44 +23,57 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   if (isInitialLoad) {
     return (
       <div className="h-screen flex flex-col items-center justify-center bg-[#FFFDF5]">
-        <RefreshCw className="w-10 h-10 text-fuchsia-500 animate-spin mb-4" />
-        <p className="text-fuchsia-600 font-bold animate-pulse">Sincronizando Lorenza...</p>
+        <div className="relative mb-6">
+          <RefreshCw className="w-12 h-12 text-fuchsia-500 animate-spin" />
+          <div className="absolute inset-0 flex items-center justify-center text-[10px] font-black text-fuchsia-600">L</div>
+        </div>
+        <p className="text-fuchsia-600 font-black uppercase tracking-[0.3em] animate-pulse">Sincronizando Lorenza...</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#FFFDF5] pb-24">
-      {/* Header Mobile */}
-      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-fuchsia-50 px-6 py-4 flex justify-between items-center shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 magenta-gradient rounded-xl flex items-center justify-center text-white font-black text-xl shadow-lg">L</div>
-          <h1 className="text-lg font-black text-gray-800 tracking-tight">Lorenza</h1>
+    <div className="min-h-screen bg-[#FFFDF5] pb-28">
+      {/* Header Premium */}
+      <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-xl border-b border-fuchsia-50 px-6 py-5 flex justify-between items-center shadow-sm">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 magenta-gradient rounded-2xl flex items-center justify-center text-white font-black text-2xl shadow-lg shadow-fuchsia-200">L</div>
+          <div>
+            <h1 className="text-xl font-black text-gray-800 tracking-tight leading-none">Lorenza</h1>
+            <span className="text-[9px] font-black text-fuchsia-400 uppercase tracking-widest">Controle de Produção</span>
+          </div>
         </div>
-        <div className={`p-2 rounded-full ${isSyncing ? 'bg-amber-50 text-amber-500' : 'bg-green-50 text-green-500'}`}>
-          {isSyncing ? <RefreshCw size={18} className="animate-spin" /> : <Wifi size={18} />}
+        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${isSyncing ? 'bg-amber-50 text-amber-500' : 'bg-green-50 text-green-500'}`}>
+          {isSyncing ? <RefreshCw size={12} className="animate-spin" /> : <Wifi size={12} />}
+          {isSyncing ? 'Salvando' : 'Online'}
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="p-4 max-w-lg mx-auto">
+      <main className="p-4 md:p-6 max-w-lg mx-auto animate-in fade-in duration-500">
         {children}
       </main>
 
-      {/* Bottom Navigation (Mobile First) */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-fuchsia-50 flex justify-around py-3 px-2 z-50 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
-        {navItems.map(item => (
-          <Link 
-            key={item.path} 
-            to={item.path} 
-            className={`flex flex-col items-center gap-1 min-w-[64px] transition-all ${
-              location.pathname === item.path ? 'text-fuchsia-600 scale-110' : 'text-gray-300'
-            }`}
-          >
-            <item.icon size={22} strokeWidth={location.pathname === item.path ? 3 : 2} />
-            <span className="text-[10px] font-bold uppercase tracking-tighter">{item.label}</span>
-          </Link>
-        ))}
+      {/* Bottom Navigation */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-fuchsia-50 flex justify-around py-4 px-2 z-50 shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
+        {navItems.map(item => {
+          const isActive = location.pathname === item.path;
+          return (
+            <Link 
+              key={item.path} 
+              to={item.path} 
+              className={`flex flex-col items-center gap-1.5 transition-all duration-300 relative ${
+                isActive ? 'text-fuchsia-600' : 'text-gray-300 hover:text-fuchsia-300'
+              }`}
+            >
+              <div className={`p-2 rounded-xl transition-all ${isActive ? 'bg-fuchsia-50' : 'bg-transparent'}`}>
+                <item.icon size={22} strokeWidth={isActive ? 3 : 2} />
+              </div>
+              <span className={`text-[8px] font-black uppercase tracking-widest ${isActive ? 'opacity-100' : 'opacity-60'}`}>{item.label}</span>
+              {isActive && <div className="absolute -top-4 w-1 h-1 bg-fuchsia-500 rounded-full" />}
+            </Link>
+          );
+        })}
       </nav>
     </div>
   );
