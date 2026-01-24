@@ -52,7 +52,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [productionLogs, setProductionLogs] = useState<ProductionLog[]>([]);
   const [storeClosingLogs, setStoreClosingLogs] = useState<StoreClosingLog[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [isSyncing, setIsSyncing] = useState(true); // Começa como true para evitar flash de "Vazio"
+  const [isSyncing, setIsSyncing] = useState(true);
 
   useEffect(() => {
     if (isFirebaseConfigured && db) {
@@ -108,9 +108,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     localStorage.setItem(LOCAL_STORAGE_KEYS.BUCKETS, JSON.stringify(newBuckets));
     localStorage.setItem(LOCAL_STORAGE_KEYS.LOGS, JSON.stringify(newLogs));
     localStorage.setItem(LOCAL_STORAGE_KEYS.CLOSING_LOGS, JSON.stringify(newClosingLogs));
-    if (newFlavors) localStorage.setItem(LOCAL_STORAGE_KEYS.FLAVORS, JSON.stringify(newFlavors));
-    if (newCats) localStorage.setItem(LOCAL_STORAGE_KEYS.CATEGORIES, JSON.stringify(newCats));
-
+    
     if (isFirebaseConfigured && db) {
       try {
         await setDoc(doc(db, "inventory", "all_buckets"), { items: newBuckets });
@@ -121,20 +119,10 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           categories: newCats || categories
         });
       } catch (e) {
-        console.error("Erro ao sincronizar:", e);
+        console.error("Erro ao sincronizar Firebase:", e);
       }
     }
   };
-
-  const addNotification = useCallback((message: string, type: 'info' | 'warning' | 'success' = 'info') => {
-    const newNotif: Notification = {
-      id: Math.random().toString(36).substr(2, 9),
-      message,
-      type,
-      timestamp: new Date(),
-    };
-    setNotifications(prev => [newNotif, ...prev].slice(0, 10));
-  }, []);
 
   const addProduction = async (entries: ProductionEntry[], productionDate: Date) => {
     const newBuckets: Bucket[] = [];
@@ -176,21 +164,13 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const updatedBuckets = [...buckets, ...newBuckets];
     const updatedLogs = [...newLogs, ...productionLogs];
-
     setBuckets(updatedBuckets);
     setProductionLogs(updatedLogs);
     await persistData(updatedBuckets, updatedLogs, storeClosingLogs);
-    addNotification(`Lote de produção registrado.`, 'success');
   };
 
-  const updateBucket = async (updatedBucket: Bucket) => {
-    const updatedBuckets = buckets.map(b => b.id === updatedBucket.id ? updatedBucket : b);
-    setBuckets(updatedBuckets);
-    await persistData(updatedBuckets, productionLogs, storeClosingLogs);
-  };
-
-  const deleteBucket = async (id: string) => {
-    const updatedBuckets = buckets.filter(b => b.id !== id);
+  const distributeBuckets = async (entry: DistributionEntry) => {
+    const updatedBuckets = buckets.map(b => entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b);
     setBuckets(updatedBuckets);
     await persistData(updatedBuckets, productionLogs, storeClosingLogs);
   };
@@ -204,37 +184,41 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       items: closingBuckets.map(b => ({ flavorId: b.flavorId, grams: b.grams }))
     };
 
-    // Identificar IDs que pertenciam à loja mas não estão no fechamento (foram vendidos)
-    const storeBucketIdsAntes = buckets.filter(b => b.location === storeName).map(b => b.id);
-    const storeBucketIdsDepois = closingBuckets.map(b => b.id);
-    const idsVendidos = storeBucketIdsAntes.filter(id => !storeBucketIdsDepois.includes(id));
-
+    // Filtra apenas os IDs que pertencem a esta loja e compara com o que sobrou (closingBuckets)
+    const storeBucketsAntes = buckets.filter(b => b.location === storeName && b.status === 'estoque');
+    const idsPresentesNoFechamento = closingBuckets.map(b => b.id);
+    
     const updatedBuckets = buckets.map(b => {
-      // Caso o balde esteja na lista de fechamento (ainda em vitrine)
-      const foundInClosing = closingBuckets.find(cb => cb.id === b.id);
-      if (foundInClosing) {
-        return { ...b, grams: foundInClosing.grams, location: storeName, status: 'estoque' as const };
+      // Se o balde é desta loja
+      if (b.location === storeName && b.status === 'estoque') {
+        const found = closingBuckets.find(cb => cb.id === b.id);
+        if (found) {
+          // Balde continua na vitrine com novo peso
+          return { ...b, grams: found.grams };
+        } else {
+          // Balde não está na lista enviada, logo, acabou/foi vendido
+          return { ...b, status: 'vendido' as const };
+        }
       }
-      // Caso o balde tenha sido marcado como vendido/acabou neste fechamento
-      if (idsVendidos.includes(b.id)) {
-        return { ...b, status: 'vendido' as const };
-      }
-      // Outros baldes (Fábrica, outras lojas) ficam iguais
       return b;
-    }).filter(b => b.status === 'estoque');
+    });
 
     const newClosingLogs = [newClosingLog, ...storeClosingLogs];
     setBuckets(updatedBuckets);
     setStoreClosingLogs(newClosingLogs);
     await persistData(updatedBuckets, productionLogs, newClosingLogs);
-    addNotification(`Dados da ${storeName} enviados e estoque sincronizado.`, 'success');
   };
 
-  const distributeBuckets = async (entry: DistributionEntry) => {
-    const updatedBuckets = buckets.map(b => entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b);
+  const updateBucket = async (updatedBucket: Bucket) => {
+    const updatedBuckets = buckets.map(b => b.id === updatedBucket.id ? updatedBucket : b);
     setBuckets(updatedBuckets);
     await persistData(updatedBuckets, productionLogs, storeClosingLogs);
-    addNotification(`Baldes distribuídos para ${entry.targetStore}.`, 'info');
+  };
+
+  const deleteBucket = async (id: string) => {
+    const updatedBuckets = buckets.filter(b => b.id !== id);
+    setBuckets(updatedBuckets);
+    await persistData(updatedBuckets, productionLogs, storeClosingLogs);
   };
 
   const updateFlavor = async (updated: Flavor) => {
@@ -269,47 +253,33 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `lorenza_full_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `lorenza_backup_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
   };
 
   const exportToCSV = () => {
-    let csv = "Tipo,Data,Entidade,Quantidade/Peso,Detalhes\n";
+    let csv = "Tipo,Data,Entidade,Quantidade/Peso\n";
     productionLogs.forEach(log => {
       const flavor = flavors.find(f => f.id === log.flavorId)?.name || "N/A";
-      csv += `PRODUCAO,${log.date.toLocaleDateString()},${flavor},${log.totalGrams}g,${log.bucketCount} un\n`;
+      csv += `PRODUCAO,${log.date.toLocaleDateString()},${flavor},${log.totalGrams}g\n`;
     });
-    storeClosingLogs.forEach(log => {
-      csv += `FECHAMENTO,${log.date.toLocaleDateString()},${log.storeName},${log.totalKg.toFixed(1)}kg,${log.items.length} itens\n`;
-    });
-    
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `lorenza_relatorio_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
+    link.setAttribute("download", `relatorio_lorenza.csv`);
     link.click();
-    document.body.removeChild(link);
   };
 
   const importData = async (jsonData: string) => {
     try {
       const data = JSON.parse(jsonData);
-      const importedBuckets = data.buckets.map((b: any) => ({ ...b, producedAt: new Date(b.producedAt) }));
-      const importedLogs = data.productionLogs.map((l: any) => ({ ...l, date: new Date(l.date) }));
-      const importedClosing = (data.storeClosingLogs || []).map((l: any) => ({ ...l, date: new Date(l.date) }));
-      
-      setBuckets(importedBuckets);
+      setBuckets(data.buckets.map((b: any) => ({ ...b, producedAt: new Date(b.producedAt) })));
       setFlavors(data.flavors);
       setCategories(data.categories);
-      setProductionLogs(importedLogs);
-      setStoreClosingLogs(importedClosing);
-      
-      await persistData(importedBuckets, importedLogs, importedClosing, data.flavors, data.categories);
-      addNotification("Backup importado.", "success");
-    } catch (e) { addNotification("Erro ao importar.", "warning"); }
+      setProductionLogs(data.productionLogs.map((l: any) => ({ ...l, date: new Date(l.date) })));
+      setStoreClosingLogs((data.storeClosingLogs || []).map((l: any) => ({ ...l, date: new Date(l.date) })));
+    } catch (e) { console.error("Erro importação:", e); }
   };
 
   return (
