@@ -3,7 +3,7 @@ import React, { createContext, useContext, useState, useEffect, useMemo, useCall
 import { Bucket, ProductionEntry, DistributionEntry, Flavor, Category, ProductionLog, StoreClosingLog, StoreName } from '../types';
 import { INITIAL_FLAVORS, INITIAL_CATEGORIES } from '../constants';
 import { db, isFirebaseConfigured } from '../lib/firebase';
-import { onSnapshot, doc, updateDoc, Timestamp } from 'firebase/firestore';
+import { onSnapshot, doc, setDoc, Timestamp, getDoc } from 'firebase/firestore';
 
 interface InventoryContextType {
   buckets: Bucket[];
@@ -40,24 +40,46 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [isSyncing, setIsSyncing] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-  // Memoized flavor map for O(1) lookups throughout the app
   const flavorsMap = useMemo(() => {
     return flavors.reduce((acc, f) => ({ ...acc, [f.id]: f }), {} as Record<string, Flavor>);
   }, [flavors]);
 
   useEffect(() => {
     if (!isFirebaseConfigured || !db) {
+      console.warn("Firebase não configurado ou offline. Usando dados locais.");
       setIsInitialLoad(false);
       return;
     }
 
     const docRef = doc(db, "inventory", "main");
+    
+    // Tenta verificar se o documento existe, se não, inicializa
+    const initializeDb = async () => {
+      try {
+        const snap = await getDoc(docRef);
+        if (!snap.exists()) {
+          console.log("Inicializando documento principal no Firestore...");
+          await setDoc(docRef, {
+            buckets: [],
+            flavors: INITIAL_FLAVORS,
+            categories: INITIAL_CATEGORIES,
+            productionLogs: [],
+            storeClosingLogs: [],
+            lastUpdated: new Date().toISOString()
+          });
+        }
+      } catch (e) {
+        console.error("Erro ao verificar/inicializar Firestore:", e);
+      }
+    };
+
+    initializeDb();
+
     const unsub = onSnapshot(docRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
         const toDate = (val: any) => val instanceof Timestamp ? val.toDate() : new Date(val || Date.now());
 
-        // Batch updates to minimize re-renders
         if (data.buckets) setBuckets(data.buckets.map((b: any) => ({ ...b, producedAt: toDate(b.producedAt) })));
         if (data.flavors) setFlavors(data.flavors);
         if (data.categories) setCategories(data.categories);
@@ -77,7 +99,8 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (!db) return false;
     setIsSyncing(true);
     try {
-      await updateDoc(doc(db, "inventory", "main"), { ...updates, lastUpdated: new Date().toISOString() });
+      // Usar setDoc com merge: true é mais seguro que updateDoc se o documento puder não existir
+      await setDoc(doc(db, "inventory", "main"), { ...updates, lastUpdated: new Date().toISOString() }, { merge: true });
       return true;
     } catch (e: any) {
       console.error("Persistence Error:", e.message);
@@ -87,11 +110,8 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   };
 
-  // Reusable logic for sorting buckets based on flavor stock volume (suggested distribution)
   const getSuggestedDistribution = useCallback((location: StoreName) => {
     const locBuckets = buckets.filter(b => b.location === location && b.status === 'estoque');
-    
-    // Summary of stock per flavor for this location
     const stockSummary: Record<string, number> = {};
     locBuckets.forEach(b => {
       stockSummary[b.flavorId] = (stockSummary[b.flavorId] || 0) + b.grams;
@@ -100,9 +120,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return [...locBuckets].sort((a, b) => {
       const stockA = stockSummary[a.flavorId] || 0;
       const stockB = stockSummary[b.flavorId] || 0;
-      // Primary: More stock first
       if (stockB !== stockA) return stockB - stockA;
-      // Secondary: Alphabetical
       const nameA = flavorsMap[a.flavorId]?.name || '';
       const nameB = flavorsMap[b.flavorId]?.name || '';
       return nameA.localeCompare(nameB);
@@ -117,11 +135,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     entries.forEach(entry => {
       const flavor = flavorsMap[entry.flavorId];
       let seq = buckets.filter(b => b.flavorId === entry.flavorId).length + 1;
-      
-      const totalGrams = entry.weights.reduce((a, b) => {
-        const val = Number(b);
-        return Math.round((a + val) * 100) / 100;
-      }, 0);
+      const totalGrams = entry.weights.reduce((a, b) => Math.round((a + Number(b)) * 100) / 100, 0);
 
       entry.weights.forEach(w => {
         newBuckets.push({
@@ -136,19 +150,14 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         });
       });
 
-      logEntries.push({
-        flavorId: entry.flavorId,
-        totalGrams,
-        bucketCount: entry.weights.length
-      });
+      logEntries.push({ flavorId: entry.flavorId, totalGrams, bucketCount: entry.weights.length });
     });
 
     const success = await persist({ 
       buckets: [...buckets, ...newBuckets], 
       productionLogs: [{ id: batchId, batchNote: note, entries: logEntries, date } as ProductionLog, ...productionLogs] 
     });
-    
-    if (!success) throw new Error("Erro de rede: Não foi possível salvar o lote de produção no Firebase.");
+    if (!success) throw new Error("Erro ao salvar no Firebase.");
   };
 
   const updateProductionBatch = async (id: string, entries: ProductionEntry[], note: string) => {
@@ -162,11 +171,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     entries.forEach(entry => {
       const flavor = flavorsMap[entry.flavorId];
       let seq = filteredBuckets.filter(b => b.flavorId === entry.flavorId).length + 1;
-      
-      const totalGrams = entry.weights.reduce((a, b) => {
-        const val = Number(b);
-        return Math.round((a + val) * 100) / 100;
-      }, 0);
+      const totalGrams = entry.weights.reduce((a, b) => Math.round((a + Number(b)) * 100) / 100, 0);
 
       entry.weights.forEach(w => {
         newBuckets.push({
@@ -181,48 +186,40 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         });
       });
 
-      logEntries.push({
-        flavorId: entry.flavorId,
-        totalGrams,
-        bucketCount: entry.weights.length
-      });
+      logEntries.push({ flavorId: entry.flavorId, totalGrams, bucketCount: entry.weights.length });
     });
 
     const success = await persist({
       buckets: [...filteredBuckets, ...newBuckets],
       productionLogs: productionLogs.map(l => l.id === id ? { ...l, batchNote: note, entries: logEntries } : l)
     });
-    
-    if (!success) throw new Error("Falha na atualização: O servidor não respondeu. Tente novamente.");
+    if (!success) throw new Error("Erro ao atualizar no Firebase.");
   };
 
   const deleteProductionBatch = async (id: string) => {
-    if (!window.confirm("Deseja realmente excluir este lote? Esta ação removerá todos os baldes associados permanentemente.")) return;
+    if (!window.confirm("Deseja excluir este lote?")) return;
     const success = await persist({ 
       buckets: buckets.filter(b => b.note !== id), 
       productionLogs: productionLogs.filter(l => l.id !== id) 
     });
-    if (!success) throw new Error("Erro ao excluir: Falha na conexão com o banco de dados.");
+    if (!success) throw new Error("Erro ao excluir do Firebase.");
   };
 
   const distributeBuckets = async (entry: DistributionEntry) => {
-    const updated = buckets.map(b => 
-      entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b
-    );
+    const updated = buckets.map(b => entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b);
     const success = await persist({ buckets: updated });
-    if (!success) throw new Error("Erro de transferência: Ocorreu um problema ao sincronizar a distribuição.");
+    if (!success) throw new Error("Erro ao distribuir.");
   };
 
   const markAsSold = async (bucketId: string) => {
     const updated = buckets.map(b => b.id === bucketId ? { ...b, status: 'vendido' as const } : b);
     const success = await persist({ buckets: updated });
-    if (!success) throw new Error("Sincronização falhou: Não foi possível atualizar o status de venda.");
+    if (!success) throw new Error("Erro ao marcar como vendido.");
   };
 
   const updateBucketWeight = async (id: string, grams: number) => {
     const updated = buckets.map(b => b.id === id ? { ...b, grams: Number(grams) } : b);
     const success = await persist({ buckets: updated });
-    if (!success) throw new Error("Erro de peso: Falha ao salvar a nova gramagem.");
   };
 
   const saveStoreClosing = async (store: StoreName, closingBuckets: Bucket[]) => {
@@ -234,11 +231,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return b;
     });
 
-    const totalKg = closingBuckets.reduce((a, b) => {
-      const val = Number(b.grams);
-      return Math.round((a + val) * 100) / 100;
-    }, 0) / 1000;
-
+    const totalKg = closingBuckets.reduce((a, b) => Math.round((a + Number(b.grams)) * 100) / 100, 0) / 1000;
     const log: StoreClosingLog = {
       id: Math.random().toString(36).slice(2),
       storeName: store,
@@ -248,26 +241,22 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     };
 
     const success = await persist({ buckets: updated, storeClosingLogs: [log, ...storeClosingLogs] });
-    if (!success) throw new Error("Erro de fechamento: Falha ao salvar os dados da loja.");
   };
 
   const deleteBucket = async (id: string) => {
-    const success = await persist({ buckets: buckets.filter(b => b.id !== id) });
-    if (!success) throw new Error("Ação negada: Não foi possível remover o item do servidor.");
+    await persist({ buckets: buckets.filter(b => b.id !== id) });
   };
 
   const updateFlavor = async (f: Flavor) => {
-    const success = await persist({ flavors: flavors.map(old => old.id === f.id ? f : old) });
-    if (!success) throw new Error("Falha na edição: O sabor não pôde ser atualizado.");
+    await persist({ flavors: flavors.map(old => old.id === f.id ? f : old) });
   };
 
   const addCategory = async (name: string) => {
-    const success = await persist({ categories: [...categories, { id: Date.now().toString(), name }] });
-    if (!success) throw new Error("Erro de categoria: Falha ao criar no Firebase.");
+    await persist({ categories: [...categories, { id: Date.now().toString(), name }] });
   };
 
   const resetDatabase = async () => {
-    if (!window.confirm("CUIDADO: Isso apagará absolutamente tudo. Tem certeza absoluta?")) return;
+    if (!window.confirm("Zerar banco de dados?")) return;
     await persist({ buckets: [], productionLogs: [], storeClosingLogs: [], flavors: INITIAL_FLAVORS, categories: INITIAL_CATEGORIES });
   };
 
@@ -284,15 +273,10 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const csvContent = header + rows;
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const now = new Date();
-    const dateFormatted = now.toISOString().split('T')[0];
-    const timeFormatted = now.getHours().toString().padStart(2, '0') + now.getMinutes().toString().padStart(2, '0');
-    
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Lorenza_Export_${dateFormatted}_${timeFormatted}.csv`;
+    a.download = `Lorenza_Export_${new Date().getTime()}.csv`;
     a.click();
-    URL.revokeObjectURL(url);
   };
 
   return (

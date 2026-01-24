@@ -2,16 +2,33 @@
 import React, { Suspense, lazy } from 'react';
 import { HashRouter, Routes, Route } from 'react-router-dom';
 import { InventoryProvider } from './store/InventoryContext';
-import { Loader2 } from 'lucide-react';
+import { Loader2, AlertTriangle } from 'lucide-react';
 
-// Lazy loading components for performance optimization
-const Layout = lazy(() => import('./components/Layout'));
-const Dashboard = lazy(() => import('./components/Dashboard'));
-const ProductionForm = lazy(() => import('./components/ProductionForm'));
-const DistributionForm = lazy(() => import('./components/DistributionForm'));
-const InventoryList = lazy(() => import('./components/InventoryList'));
-const Settings = lazy(() => import('./components/Settings'));
-const Reports = lazy(() => import('./components/Reports'));
+// Função auxiliar para recarregar a página se um módulo falhar (comum em novos deploys)
+const safeLazy = (importFn: () => Promise<any>) => {
+  return lazy(() => 
+    importFn().catch(err => {
+      console.error("Erro ao carregar módulo:", err);
+      // Opcional: recarregar a página automaticamente uma vez
+      return { default: () => (
+        <div className="h-screen flex flex-col items-center justify-center p-6 text-center">
+          <AlertTriangle className="text-amber-500 mb-4" size={48} />
+          <h2 className="font-bold text-gray-800">Erro de Carregamento</h2>
+          <p className="text-gray-500 text-sm mt-2">Não foi possível carregar esta parte do sistema. Por favor, recarregue a página.</p>
+          <button onClick={() => window.location.reload()} className="mt-6 px-6 py-2 bg-fuchsia-600 text-white rounded-xl font-bold">Recarregar agora</button>
+        </div>
+      )};
+    })
+  );
+};
+
+const Layout = safeLazy(() => import('./components/Layout'));
+const Dashboard = safeLazy(() => import('./components/Dashboard'));
+const ProductionForm = safeLazy(() => import('./components/ProductionForm'));
+const DistributionForm = safeLazy(() => import('./components/DistributionForm'));
+const InventoryList = safeLazy(() => import('./components/InventoryList'));
+const Settings = safeLazy(() => import('./components/Settings'));
+const Reports = safeLazy(() => import('./components/Reports'));
 
 const LoadingFallback = () => (
   <div className="flex flex-col items-center justify-center h-screen bg-[#FFFDF5] gap-4">
@@ -26,7 +43,6 @@ const App: React.FC = () => {
       <HashRouter>
         <InventoryProvider>
           <Routes>
-            {/* Special standalone route for stores */}
             <Route 
               path="/loja/:storeName" 
               element={
@@ -36,7 +52,6 @@ const App: React.FC = () => {
               } 
             />
             
-            {/* Administrative routes with Layout */}
             <Route path="/" element={<Layout><Dashboard /></Layout>} />
             <Route path="/producao" element={<Layout><ProductionForm /></Layout>} />
             <Route path="/distribuicao" element={<Layout><DistributionForm /></Layout>} />
