@@ -1,14 +1,20 @@
+
 import React, { useState, useMemo } from 'react';
 import { useInventory } from '../store/InventoryContext';
-import { Truck, Package, CheckCircle2, Store, Search, Filter } from 'lucide-react';
+import { Truck, Package, CheckCircle2, Store, Search, Filter, ShoppingBag, ArrowRight, X } from 'lucide-react';
+import { Bucket } from '../types';
 
 const DistributionForm: React.FC = () => {
-  const { buckets, flavors, distributeBuckets } = useInventory();
+  const { buckets, flavors, categories, distributeBuckets } = useInventory();
   const [targetStore, setTargetStore] = useState<'Campo Duna' | 'Casa Kimo' | 'Rosa'>('Campo Duna');
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
   
-  // Lista de sabores ativos com contagem de estoque na Fábrica
-  const flavorStockList = useMemo(() => {
+  const [selectedFlavorId, setSelectedFlavorId] = useState<string | null>(null);
+  const [selectedBucketIds, setSelectedBucketIds] = useState<string[]>([]);
+
+  // Lista de sabores filtrada
+  const flavorList = useMemo(() => {
     return flavors
       .filter(f => f.isActive)
       .map(f => {
@@ -19,158 +25,196 @@ const DistributionForm: React.FC = () => {
           totalWeight: stockBuckets.reduce((acc, b) => acc + b.grams, 0)
         };
       })
-      // Filtro de busca inteligente
-      .filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase()))
-      // ORDENAÇÃO: Do que tem MAIS estoque para o que tem menos
-      .sort((a, b) => b.stockCount - a.stockCount || a.name.localeCompare(b.name));
-  }, [flavors, buckets, searchTerm]);
-
-  const [selectedFlavorId, setSelectedFlavorId] = useState<string | null>(null);
-  const [selectedBucketIds, setSelectedBucketIds] = useState<string[]>([]);
-
-  const activeFlavor = useMemo(() => 
-    flavorStockList.find(f => f.id === (selectedFlavorId || (flavorStockList.length > 0 ? flavorStockList[0].id : null)))
-  , [selectedFlavorId, flavorStockList]);
-
-  // Se o sabor selecionado sumiu do filtro, reseta
-  if (selectedFlavorId && !flavorStockList.find(f => f.id === selectedFlavorId)) {
-    setSelectedFlavorId(null);
-  }
-
-  const currentFlavorId = selectedFlavorId || activeFlavor?.id;
+      .filter(f => f.stockCount > 0)
+      .filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase()) || f.initials.toLowerCase().includes(searchTerm.toLowerCase()))
+      .filter(f => selectedCategoryId === 'all' || f.categoryIds.includes(selectedCategoryId))
+      .sort((a, b) => b.stockCount - a.stockCount);
+  }, [flavors, buckets, searchTerm, selectedCategoryId]);
 
   const availableBuckets = useMemo(() => 
-    buckets.filter(b => b.location === 'Fábrica' && b.flavorId === currentFlavorId && b.status === 'estoque')
-  , [buckets, currentFlavorId]);
+    buckets.filter(b => b.location === 'Fábrica' && b.flavorId === selectedFlavorId && b.status === 'estoque')
+  , [buckets, selectedFlavorId]);
 
-  const toggleBucket = (id: string) => {
+  const handleToggleBucket = (id: string) => {
     setSelectedBucketIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
   };
 
-  const handleSend = () => {
+  const handleDistribute = () => {
     if (selectedBucketIds.length === 0) return;
     distributeBuckets({ targetStore, bucketIds: selectedBucketIds });
     setSelectedBucketIds([]);
+    setSelectedFlavorId(null);
+  };
+
+  const getSelectedBucketsInfo = () => {
+    return selectedBucketIds.map(id => buckets.find(b => b.id === id)).filter(Boolean) as Bucket[];
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
-      <div className="bg-white p-6 md:p-8 rounded-3xl border border-fuchsia-50 shadow-sm">
-        <div className="flex flex-col md:flex-row gap-8 min-h-[500px]">
-          
-          {/* Coluna de Busca e Lista de Sabores */}
-          <div className="md:w-1/2 flex flex-col">
-            <div className="mb-6 space-y-4">
-              <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">1. Escolha o Sabor</h4>
-              <div className="relative">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-fuchsia-300" />
-                <input 
-                  type="text"
-                  placeholder="Pesquisar sabor..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full bg-fuchsia-50/50 border-none rounded-2xl pl-10 pr-4 py-3 text-sm focus:ring-2 focus:ring-fuchsia-100 outline-none font-bold text-gray-700"
-                />
-              </div>
+    <div className="max-w-7xl mx-auto space-y-6">
+      <div className="flex flex-col lg:flex-row gap-8">
+        
+        {/* Lado Esquerdo: Seleção de Sabores */}
+        <div className="flex-1 bg-white p-8 rounded-[40px] border border-fuchsia-50 shadow-sm space-y-8">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+            <div>
+              <h2 className="text-2xl font-black text-gray-800 tracking-tight">Distribuição</h2>
+              <p className="text-sm text-gray-400 font-bold uppercase tracking-widest mt-1">1. Selecione os Gelatos da Fábrica</p>
             </div>
-
-            <div className="flex-1 overflow-y-auto custom-scrollbar pr-3 space-y-1.5">
-              {flavorStockList.length === 0 ? (
-                <div className="p-10 text-center text-gray-300 italic text-xs">Nenhum sabor encontrado.</div>
-              ) : (
-                flavorStockList.map(f => (
-                  <button
-                    key={f.id}
-                    onClick={() => { setSelectedFlavorId(f.id); setSelectedBucketIds([]); }}
-                    className={`flex items-center justify-between p-3.5 rounded-2xl text-left transition-all border ${
-                      currentFlavorId === f.id 
-                        ? 'bg-fuchsia-50 border-fuchsia-200 shadow-sm' 
-                        : 'bg-white border-transparent hover:bg-fuchsia-50/30'
-                    }`}
-                  >
-                    <div>
-                      <p className={`text-sm font-bold ${currentFlavorId === f.id ? 'text-fuchsia-700' : 'text-gray-700'}`}>{f.name}</p>
-                      <p className={`text-[10px] font-bold uppercase mt-0.5 ${f.stockCount > 0 ? 'text-fuchsia-300' : 'text-gray-300'}`}>
-                        {f.stockCount} baldes em estoque
-                      </p>
-                    </div>
-                    {f.stockCount > 0 && (
-                      <div className="px-2 py-1 bg-fuchsia-100/50 text-fuchsia-600 text-[10px] font-black rounded-lg">
-                        {(f.totalWeight/1000).toFixed(1)}kg
-                      </div>
-                    )}
-                  </button>
-                ))
-              )}
+            
+            <div className="flex flex-wrap gap-2">
+              <button 
+                onClick={() => setSelectedCategoryId('all')}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${selectedCategoryId === 'all' ? 'bg-fuchsia-500 text-white shadow-lg' : 'bg-fuchsia-50 text-fuchsia-400 hover:bg-fuchsia-100'}`}
+              >
+                Todos
+              </button>
+              {categories.map(cat => (
+                <button 
+                  key={cat.id}
+                  onClick={() => setSelectedCategoryId(cat.id)}
+                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${selectedCategoryId === cat.id ? 'bg-fuchsia-500 text-white shadow-lg' : 'bg-fuchsia-50 text-fuchsia-400 hover:bg-fuchsia-100'}`}
+                >
+                  {cat.name}
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* Coluna de Seleção de Unidade e Baldes */}
-          <div className="md:w-1/2 bg-fuchsia-50/10 rounded-3xl border border-fuchsia-50 p-6 flex flex-col">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-               <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">2. Unidade de Destino</h4>
-               <div className="flex gap-1 p-1 bg-white rounded-xl border border-fuchsia-100">
-                  {(['Campo Duna', 'Casa Kimo', 'Rosa'] as const).map(s => (
-                    <button
-                      key={s}
-                      onClick={() => setTargetStore(s)}
-                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${
-                        targetStore === s ? 'bg-fuchsia-500 text-white shadow-md shadow-fuchsia-100' : 'text-gray-400 hover:text-fuchsia-400'
-                      }`}
-                    >
-                      {s}
-                    </button>
-                  ))}
-               </div>
-            </div>
+          <div className="relative">
+            <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-fuchsia-200" />
+            <input 
+              type="text"
+              placeholder="Pesquisar por nome ou sigla..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-fuchsia-50/30 border-none rounded-2xl pl-12 pr-6 py-4 text-sm font-bold text-gray-700 focus:ring-2 focus:ring-fuchsia-100 outline-none"
+            />
+          </div>
 
-            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 mb-6">
-              {availableBuckets.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-gray-300 p-8 text-center">
-                  <Package size={40} className="mb-4 opacity-20" />
-                  <p className="text-sm font-bold">Sem baldes disponíveis</p>
-                  <p className="text-xs">Produza este sabor para poder distribuir.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 max-h-[600px] overflow-y-auto custom-scrollbar pr-2">
+            {flavorList.map(f => (
+              <button
+                key={f.id}
+                onClick={() => setSelectedFlavorId(f.id === selectedFlavorId ? null : f.id)}
+                className={`group p-5 rounded-3xl border-2 transition-all text-left relative overflow-hidden ${
+                  selectedFlavorId === f.id 
+                    ? 'border-fuchsia-500 bg-fuchsia-50/50 shadow-xl shadow-fuchsia-100' 
+                    : 'border-transparent bg-white hover:border-fuchsia-200 hover:shadow-lg'
+                }`}
+              >
+                <div className="relative z-10">
+                  <span className="text-[9px] font-black text-fuchsia-300 uppercase tracking-[0.2em]">{f.initials}</span>
+                  <h4 className="text-lg font-black text-gray-800 leading-tight mt-1">{f.name}</h4>
+                  <div className="flex items-center gap-2 mt-4">
+                    <div className="bg-white/80 px-2 py-1 rounded-lg border border-fuchsia-50 flex items-center gap-1.5">
+                      <Package size={12} className="text-fuchsia-400" />
+                      <span className="text-xs font-black text-gray-700">{f.stockCount} baldes</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="absolute -right-4 -bottom-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                   <Package size={100} />
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Lado Direito: Seleção de Baldes e Envio */}
+        <div className="lg:w-[400px] space-y-6">
+          <div className="bg-white p-8 rounded-[40px] border border-fuchsia-50 shadow-sm">
+            <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-6 flex items-center gap-2">
+              <Store size={18} className="text-fuchsia-400" />
+              Destino
+            </h3>
+            
+            <div className="grid grid-cols-1 gap-2">
+              {(['Campo Duna', 'Casa Kimo', 'Rosa'] as const).map(s => (
+                <button
+                  key={s}
+                  onClick={() => setTargetStore(s)}
+                  className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${
+                    targetStore === s 
+                      ? 'border-fuchsia-500 bg-fuchsia-500 text-white shadow-lg' 
+                      : 'border-fuchsia-50 bg-white text-gray-400 hover:border-fuchsia-200'
+                  }`}
+                >
+                  <span className="text-sm font-black uppercase tracking-widest">{s}</span>
+                  {targetStore === s && <CheckCircle2 size={20} />}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-8 rounded-[40px] border border-fuchsia-50 shadow-sm flex-1 min-h-[400px] flex flex-col">
+            <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-6 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShoppingBag size={18} className="text-fuchsia-400" />
+                Baldes Selecionados
+              </div>
+              <span className="bg-fuchsia-100 text-fuchsia-600 px-2.5 py-1 rounded-full text-[10px]">{selectedBucketIds.length}</span>
+            </h3>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
+              {selectedFlavorId ? (
+                <div className="animate-in fade-in slide-in-from-top-4">
+                  <div className="flex items-center gap-2 mb-4">
+                     <div className="w-1 h-4 bg-fuchsia-500 rounded-full"></div>
+                     <span className="text-[10px] font-black text-gray-700 uppercase">Baldes de {flavors.find(f => f.id === selectedFlavorId)?.name}</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2">
+                    {availableBuckets.map(b => (
+                      <button
+                        key={b.id}
+                        onClick={() => handleToggleBucket(b.id)}
+                        className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${
+                          selectedBucketIds.includes(b.id)
+                            ? 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700'
+                            : 'border-fuchsia-50 bg-fuchsia-50/20 text-gray-400 hover:border-fuchsia-100'
+                        }`}
+                      >
+                        <div className="text-left">
+                          <p className="text-xs font-black">{b.grams}g</p>
+                          <p className="text-[9px] font-mono opacity-50">{b.id}</p>
+                        </div>
+                        {selectedBucketIds.includes(b.id) ? <CheckCircle2 size={16} /> : <div className="w-4 h-4 rounded-full border border-gray-200" />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : selectedBucketIds.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-center text-gray-300">
+                   <Package size={48} className="opacity-10 mb-4" />
+                   <p className="text-sm font-bold">Toque em um sabor</p>
+                   <p className="text-xs mt-1">para ver os baldes disponíveis</p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  {availableBuckets.map(b => (
-                    <button
-                      key={b.id}
-                      onClick={() => toggleBucket(b.id)}
-                      className={`p-4 rounded-2xl border-2 text-left relative transition-all group ${
-                        selectedBucketIds.includes(b.id) 
-                          ? 'border-fuchsia-400 bg-fuchsia-50' 
-                          : 'border-white bg-white hover:border-fuchsia-100 shadow-sm'
-                      }`}
-                    >
-                      <div className="flex flex-col">
-                        <span className="text-[10px] font-black text-gray-400 uppercase mb-1">Peso</span>
-                        <span className="text-lg font-black text-gray-700">{b.grams}g</span>
-                        <span className="text-[9px] font-mono text-fuchsia-300 mt-2 truncate">{b.id}</span>
+                <div className="space-y-3">
+                  {getSelectedBucketsInfo().map(b => (
+                    <div key={b.id} className="flex items-center justify-between p-4 bg-fuchsia-50 rounded-2xl border border-fuchsia-100">
+                      <div>
+                        <p className="text-[10px] font-black text-fuchsia-600 uppercase mb-1">{flavors.find(f => f.id === b.flavorId)?.name}</p>
+                        <p className="text-xs font-black text-gray-800">{b.grams}g</p>
                       </div>
-                      <div className={`absolute top-3 right-3 w-5 h-5 rounded-full flex items-center justify-center transition-all border ${
-                        selectedBucketIds.includes(b.id) ? 'bg-fuchsia-500 border-fuchsia-500 text-white' : 'bg-transparent border-gray-100'
-                      }`}>
-                        {selectedBucketIds.includes(b.id) && <CheckCircle2 size={12} />}
-                      </div>
-                    </button>
+                      <button onClick={() => handleToggleBucket(b.id)} className="text-rose-400 hover:text-rose-600">
+                        <X size={16} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
             </div>
 
-            <div className="pt-6 border-t border-fuchsia-50 flex items-center justify-between">
-              <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-tighter">Selecionados</p>
-                <p className="text-xl font-black text-fuchsia-600">{selectedBucketIds.length} <span className="text-sm font-normal text-gray-400">baldes</span></p>
-              </div>
+            <div className="pt-8 border-t border-fuchsia-50 mt-6">
               <button
-                onClick={handleSend}
                 disabled={selectedBucketIds.length === 0}
-                className="bg-sky-500 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-sky-100 flex items-center gap-2 hover:bg-sky-600 active:scale-95 disabled:opacity-30 transition-all"
+                onClick={handleDistribute}
+                className="w-full magenta-gradient text-white py-5 rounded-3xl font-black text-sm uppercase tracking-widest shadow-2xl shadow-fuchsia-200 flex items-center justify-center gap-3 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-30 disabled:grayscale"
               >
-                <Truck size={18} />
-                Enviar
+                <Truck size={20} />
+                Enviar para {targetStore}
+                <ArrowRight size={18} />
               </button>
             </div>
           </div>
