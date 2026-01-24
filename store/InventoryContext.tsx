@@ -79,6 +79,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     
     entries.forEach(entry => {
       const flavor = flavors.find(f => f.id === entry.flavorId);
+      // Garantir sequência única por sabor baseada no estoque total histórico (buckets + novos)
       let seq = buckets.filter(b => b.flavorId === entry.flavorId).length + 1;
       
       entry.weights.forEach(w => {
@@ -126,9 +127,12 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const saveStoreClosing = async (store: StoreName, closingBuckets: Bucket[]) => {
+    // Pegamos todos os baldes que ESTAVAM na loja
     const updated = buckets.map(b => {
       if (b.location === store && b.status === 'estoque') {
         const found = closingBuckets.find(cb => cb.id === b.id);
+        // Se o balde ainda está na lista de fechamento, atualiza peso.
+        // Se não está mais, significa que foi zerado/removido (marcar como vendido)
         return found ? { ...b, grams: Number(found.grams) } : { ...b, status: 'vendido' as const };
       }
       return b;
