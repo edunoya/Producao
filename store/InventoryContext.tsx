@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Bucket, ProductionEntry, DistributionEntry, Notification, StoreName, Flavor, Category, ProductionLog, StoreClosingLog } from '../types';
 import { INITIAL_FLAVORS, INITIAL_CATEGORIES } from '../constants';
 import { db, isFirebaseConfigured } from '../lib/firebase';
@@ -7,8 +7,7 @@ import {
   onSnapshot, 
   setDoc, 
   doc, 
-  updateDoc,
-  getDoc
+  updateDoc
 } from 'firebase/firestore';
 
 interface InventoryContextType {
@@ -19,6 +18,7 @@ interface InventoryContextType {
   storeClosingLogs: StoreClosingLog[];
   notifications: Notification[];
   isSyncing: boolean;
+  isInitialLoad: boolean;
   isLocalMode: boolean;
   addProduction: (entries: ProductionEntry[], productionDate: Date) => void;
   distributeBuckets: (entry: DistributionEntry) => void;
@@ -37,12 +37,7 @@ interface InventoryContextType {
 
 const InventoryContext = createContext<InventoryContextType | undefined>(undefined);
 
-const STORAGE_KEYS = {
-  BUCKETS: 'lorenza_buckets_v2',
-  LOGS: 'lorenza_logs_v2',
-  CLOSING: 'lorenza_closing_v2',
-  META: 'lorenza_meta_v2'
-};
+const STORAGE_KEY_BUCKETS = 'lorenza_buckets_v3';
 
 export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [buckets, setBuckets] = useState<Bucket[]>([]);
@@ -51,23 +46,24 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [productionLogs, setProductionLogs] = useState<ProductionLog[]>([]);
   const [storeClosingLogs, setStoreClosingLogs] = useState<StoreClosingLog[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [isSyncing, setIsSyncing] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-  // 1. SINCRONIZAÇÃO INICIAL E REAL-TIME
+  // 1. ESCUTA EM TEMPO REAL (FIREBASE)
   useEffect(() => {
     if (isFirebaseConfigured && db) {
-      // Listener para Baldes (Estoque Vivo)
       const unsubBuckets = onSnapshot(doc(db, "inventory", "all_buckets"), (docSnap) => {
         if (docSnap.exists()) {
           const items = docSnap.data().items || [];
           const mapped = items.map((b: any) => ({ ...b, producedAt: new Date(b.producedAt) }));
           setBuckets(mapped);
-          localStorage.setItem(STORAGE_KEYS.BUCKETS, JSON.stringify(mapped));
         }
-        setIsSyncing(false);
+        setIsInitialLoad(false);
+      }, (err) => {
+        console.error("Firebase Sync Error:", err);
+        setIsInitialLoad(false);
       });
 
-      // Listener para Metadados e Logs
       const unsubSettings = onSnapshot(doc(db, "settings", "main"), (docSnap) => {
         if (docSnap.exists()) {
           const data = docSnap.data();
@@ -80,74 +76,70 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       return () => { unsubBuckets(); unsubSettings(); };
     } else {
-      // Modo Offline
-      const localBuckets = localStorage.getItem(STORAGE_KEYS.BUCKETS);
-      if (localBuckets) setBuckets(JSON.parse(localBuckets).map((b: any) => ({ ...b, producedAt: new Date(b.producedAt) })));
-      setIsSyncing(false);
+      const local = localStorage.getItem(STORAGE_KEY_BUCKETS);
+      if (local) setBuckets(JSON.parse(local).map((b: any) => ({ ...b, producedAt: new Date(b.producedAt) })));
+      setIsInitialLoad(false);
     }
   }, []);
 
-  // 2. FUNÇÃO DE PERSISTÊNCIA MESTRE
-  const syncToCloud = async (
+  // 2. MOTOR DE PERSISTÊNCIA ATÔMICA
+  const persistState = useCallback(async (
     newBuckets: Bucket[], 
-    newProdLogs?: ProductionLog[], 
-    newClosingLogs?: StoreClosingLog[],
-    newFlavors?: Flavor[],
-    newCats?: Category[]
+    meta?: { prodLogs?: ProductionLog[], closingLogs?: StoreClosingLog[], flavors?: Flavor[], cats?: Category[] }
   ) => {
-    if (!isFirebaseConfigured || !db) {
-      localStorage.setItem(STORAGE_KEYS.BUCKETS, JSON.stringify(newBuckets));
-      return;
-    }
+    setIsSyncing(true);
+    localStorage.setItem(STORAGE_KEY_BUCKETS, JSON.stringify(newBuckets));
 
-    try {
-      // Salvamento Atômico do Inventário
-      await setDoc(doc(db, "inventory", "all_buckets"), { 
-        items: newBuckets,
-        lastSync: new Date().toISOString()
-      });
+    if (isFirebaseConfigured && db) {
+      try {
+        await setDoc(doc(db, "inventory", "all_buckets"), { 
+          items: newBuckets,
+          updatedAt: new Date().toISOString()
+        });
 
-      // Atualização de Logs e Settings
-      const settingsUpdate: any = {};
-      if (newProdLogs) settingsUpdate.productionLogs = newProdLogs;
-      if (newClosingLogs) settingsUpdate.storeClosingLogs = newClosingLogs;
-      if (newFlavors) settingsUpdate.flavors = newFlavors;
-      if (newCats) settingsUpdate.categories = newCats;
-
-      if (Object.keys(settingsUpdate).length > 0) {
-        await updateDoc(doc(db, "settings", "main"), settingsUpdate);
+        if (meta) {
+          const updateObj: any = {};
+          if (meta.prodLogs) updateObj.productionLogs = meta.prodLogs;
+          if (meta.closingLogs) updateObj.storeClosingLogs = meta.closingLogs;
+          if (meta.flavors) updateObj.flavors = meta.flavors;
+          if (meta.cats) updateObj.categories = meta.cats;
+          
+          if (Object.keys(updateObj).length > 0) {
+            await updateDoc(doc(db, "settings", "main"), updateObj);
+          }
+        }
+      } catch (e) {
+        console.error("Sync Failure:", e);
+        addNotification("Erro de conexão. Dados salvos localmente.", "warning");
       }
-    } catch (e) {
-      console.error("Critical Sync Error:", e);
-      addNotification("Erro ao salvar na nuvem. Verifique sua conexão.", "warning");
     }
-  };
+    setIsSyncing(false);
+  }, []);
 
   const addProduction = async (entries: ProductionEntry[], productionDate: Date) => {
     const newBucketsToAdd: Bucket[] = [];
-    const newLogsToAdd: ProductionLog[] = [];
+    const newLogs: ProductionLog[] = [];
     const dateStr = `${productionDate.getDate().toString().padStart(2, '0')}${(productionDate.getMonth() + 1).toString().padStart(2, '0')}`;
 
     entries.forEach(entry => {
       const flavor = flavors.find(f => f.id === entry.flavorId);
       const initials = flavor?.initials || 'XXX';
-      let dailySeq = buckets.filter(b => b.flavorId === entry.flavorId && new Date(b.producedAt).toDateString() === productionDate.toDateString()).length + 1;
+      let seq = buckets.filter(b => b.flavorId === entry.flavorId && b.producedAt.toDateString() === productionDate.toDateString()).length + 1;
 
-      entry.weights.forEach(weight => {
+      entry.weights.forEach(w => {
         newBucketsToAdd.push({
-          id: `${initials}-${dateStr}-${dailySeq.toString().padStart(2, '0')}-${Math.random().toString(36).substr(2, 4)}`,
+          id: `${initials}-${dateStr}-${seq.toString().padStart(2, '0')}-${Math.random().toString(36).substr(2, 4)}`,
           flavorId: entry.flavorId,
-          grams: weight,
+          grams: w,
           producedAt: productionDate,
           note: entry.note,
           location: 'Fábrica',
           status: 'estoque',
-          sequence: dailySeq
+          sequence: seq++
         });
-        dailySeq++;
       });
 
-      newLogsToAdd.push({
+      newLogs.push({
         id: Math.random().toString(36).substr(2, 9),
         flavorId: entry.flavorId,
         totalGrams: entry.weights.reduce((a, b) => a + b, 0),
@@ -158,31 +150,29 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     });
 
     const finalBuckets = [...buckets, ...newBucketsToAdd];
-    const finalLogs = [...newLogsToAdd, ...productionLogs];
+    const finalLogs = [...newLogs, ...productionLogs];
     
     setBuckets(finalBuckets);
     setProductionLogs(finalLogs);
-    await syncToCloud(finalBuckets, finalLogs);
-    addNotification("Produção salva e sincronizada.", "success");
+    await persistState(finalBuckets, { prodLogs: finalLogs });
+    addNotification("Lote de produção sincronizado.", "success");
   };
 
   const distributeBuckets = async (entry: DistributionEntry) => {
     const finalBuckets = buckets.map(b => 
       entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b
     );
-    
     setBuckets(finalBuckets);
-    await syncToCloud(finalBuckets);
-    addNotification(`Distribuição para ${entry.targetStore} concluída.`, "success");
+    await persistState(finalBuckets);
+    addNotification(`${entry.bucketIds.length} baldes enviados para ${entry.targetStore}.`, "success");
   };
 
   const saveStoreClosing = async (storeName: StoreName, closingBuckets: Bucket[]) => {
-    // Preservamos baldes de outras lojas e atualizamos os desta loja
     const finalBuckets = buckets.map(b => {
       if (b.location === storeName && b.status === 'estoque') {
-        const itemNaVitrine = closingBuckets.find(cb => cb.id === b.id);
-        if (itemNaVitrine) {
-          return { ...b, grams: itemNaVitrine.grams };
+        const found = closingBuckets.find(cb => cb.id === b.id);
+        if (found) {
+          return { ...b, grams: found.grams };
         } else {
           return { ...b, status: 'vendido' as const };
         }
@@ -201,43 +191,44 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const finalClosingLogs = [newClosingLog, ...storeClosingLogs];
     setBuckets(finalBuckets);
     setStoreClosingLogs(finalClosingLogs);
-    await syncToCloud(finalBuckets, productionLogs, finalClosingLogs);
+    await persistState(finalBuckets, { closingLogs: finalClosingLogs });
+    addNotification(`Inventário ${storeName} atualizado.`, "success");
   };
 
   const updateBucket = async (updated: Bucket) => {
     const final = buckets.map(b => b.id === updated.id ? updated : b);
     setBuckets(final);
-    await syncToCloud(final);
+    await persistState(final);
   };
 
   const deleteBucket = async (id: string) => {
     const final = buckets.filter(b => b.id !== id);
     setBuckets(final);
-    await syncToCloud(final);
+    await persistState(final);
   };
 
   const updateFlavor = async (f: Flavor) => {
     const finalFlavors = flavors.map(old => old.id === f.id ? f : old);
     setFlavors(finalFlavors);
-    await syncToCloud(buckets, productionLogs, storeClosingLogs, finalFlavors);
+    await persistState(buckets, { flavors: finalFlavors });
   };
 
   const addCategory = async (name: string) => {
     const finalCats = [...categories, { id: Date.now().toString(), name }];
     setCategories(finalCats);
-    await syncToCloud(buckets, productionLogs, storeClosingLogs, flavors, finalCats);
+    await persistState(buckets, { cats: finalCats });
   };
 
   const updateCategory = async (c: Category) => {
     const finalCats = categories.map(old => old.id === c.id ? c : old);
     setCategories(finalCats);
-    await syncToCloud(buckets, productionLogs, storeClosingLogs, flavors, finalCats);
+    await persistState(buckets, { cats: finalCats });
   };
 
   const deleteCategory = async (id: string) => {
     const finalCats = categories.filter(c => c.id !== id);
     setCategories(finalCats);
-    await syncToCloud(buckets, productionLogs, storeClosingLogs, flavors, finalCats);
+    await persistState(buckets, { cats: finalCats });
   };
 
   const addNotification = (message: string, type: 'info' | 'warning' | 'success' = 'info') => {
@@ -279,13 +270,19 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setCategories(data.categories);
       setProductionLogs(data.productionLogs.map((x:any)=>({...x, date: new Date(x.date)})));
       setStoreClosingLogs(data.storeClosingLogs.map((x:any)=>({...x, date: new Date(x.date)})));
-      await syncToCloud(b, data.productionLogs, data.storeClosingLogs, data.flavors, data.categories);
+      await persistState(b, { 
+        prodLogs: data.productionLogs, 
+        closingLogs: data.storeClosingLogs, 
+        flavors: data.flavors, 
+        cats: data.categories 
+      });
     } catch (e) { console.error("Import Error", e); }
   };
 
   return (
     <InventoryContext.Provider value={{ 
-      buckets, flavors, categories, productionLogs, storeClosingLogs, notifications, isSyncing, isLocalMode: !isFirebaseConfigured, 
+      buckets, flavors, categories, productionLogs, storeClosingLogs, notifications, 
+      isSyncing, isInitialLoad, isLocalMode: !isFirebaseConfigured, 
       addProduction, distributeBuckets, updateBucket, deleteBucket, updateFlavor, addCategory, updateCategory, 
       deleteCategory, saveStoreClosing, dismissNotification, exportData, importData, exportToCSV 
     }}>
