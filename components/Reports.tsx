@@ -2,28 +2,21 @@
 import React, { useState, useMemo } from 'react';
 import { useInventory } from '../store/InventoryContext';
 import { STORES } from '../constants';
-import { Download, TrendingUp, Package, Calendar, BarChart3, PieChart as PieIcon, MapPin, ChevronDown, ChevronUp, AlertCircle, Share2 } from 'lucide-react';
+import { Download, TrendingUp, Package, Calendar, BarChart3, PieChart as PieIcon, MapPin, ChevronDown, ChevronUp, AlertCircle, Share2, Award, List, Store as StoreIcon } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   BarChart, Bar, PieChart, Pie, Cell, Legend 
 } from 'recharts';
 
-const COLORS = ['#D946EF', '#A21CAF', '#F472B6', '#F0ABFC', '#701A75'];
-
-interface StoreStockData {
-  totalGrams: number;
-  bucketCount: number;
-  flavors: Record<string, { grams: number, count: number }>;
-}
+const COLORS = ['#D946EF', '#A21CAF', '#F472B6', '#F0ABFC', '#701A75', '#E879F9'];
 
 const Reports: React.FC = () => {
-  const { productionLogs, buckets, flavors, categories, exportToCSV, isSyncing } = useInventory();
+  const { productionLogs, buckets, flavors, categories, storeClosingLogs, exportToCSV, isSyncing } = useInventory();
+  const [expandedStore, setExpandedStore] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState({ 
     start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
     end: new Date().toISOString().split('T')[0]
   });
-
-  const [expandedStore, setExpandedStore] = useState<string | null>(null);
 
   const filteredLogs = useMemo(() => {
     return productionLogs.filter(l => {
@@ -32,275 +25,219 @@ const Reports: React.FC = () => {
     });
   }, [productionLogs, dateRange]);
 
-  const storeStockReport = useMemo(() => {
-    const report: Record<string, StoreStockData> = {};
-    const locations = ['Fábrica', ...STORES];
-    
-    locations.forEach(loc => {
-      report[loc] = { totalGrams: 0, bucketCount: 0, flavors: {} };
-    });
-
-    buckets.filter(b => b.status === 'estoque').forEach(b => {
-      const loc = b.location;
-      if (!report[loc]) return;
-      report[loc].totalGrams += b.grams;
-      report[loc].bucketCount += 1;
-      const flavorName = flavors.find(f => f.id === b.flavorId)?.name || 'Desconhecido';
-      if (!report[loc].flavors[flavorName]) {
-        report[loc].flavors[flavorName] = { grams: 0, count: 0 };
-      }
-      report[loc].flavors[flavorName].grams += b.grams;
-      report[loc].flavors[flavorName].count += 1;
-    });
-
-    return report;
-  }, [buckets, flavors]);
-
-  const timelineData = useMemo(() => {
+  // 1. Timeline Comparativa dos Top 5 Sabores
+  const timelineMultiData = useMemo(() => {
     const daily: any = {};
+    const top5Ids = flavors.map(f => {
+      const total = filteredLogs.reduce((acc, l) => acc + l.entries.filter(e => e.flavorId === f.id).reduce((s, e) => s + e.totalGrams, 0), 0);
+      return { id: f.id, name: f.name, total };
+    }).sort((a, b) => b.total - a.total).slice(0, 5);
+
     filteredLogs.forEach(l => {
       const d = l.date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-      const total = l.entries.reduce((a, b) => a + b.totalGrams, 0) / 1000;
-      daily[d] = (daily[d] || 0) + total;
-    });
-    return Object.entries(daily).map(([name, kg]) => ({ name, kg }));
-  }, [filteredLogs]);
-
-  const flavorRanking = useMemo(() => {
-    const ranking: any = {};
-    filteredLogs.forEach(l => {
-      l.entries.forEach(e => {
-        const name = flavors.find(f => f.id === e.flavorId)?.name || 'Outros';
-        ranking[name] = (ranking[name] || 0) + e.totalGrams / 1000;
+      if (!daily[d]) daily[d] = { name: d };
+      top5Ids.forEach(t => {
+        const entry = l.entries.find(e => e.flavorId === t.id);
+        daily[d][t.name] = (daily[d][t.name] || 0) + (entry ? entry.totalGrams / 1000 : 0);
       });
     });
-    return Object.entries(ranking)
-      .sort((a: any, b: any) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([name, kg]) => ({ name, kg }));
+    return { data: Object.values(daily), flavors: top5Ids.map(t => t.name) };
   }, [filteredLogs, flavors]);
 
-  const distributionByStore = useMemo(() => {
-    const dist: Record<string, number> = {};
-    STORES.forEach(s => dist[s] = 0);
+  // 2. Vendas por Loja (Baseado nos logs de fechamento)
+  const salesByStoreReport = useMemo(() => {
+    const report: any = {};
+    STORES.forEach(s => report[s] = []);
     
-    buckets.forEach(b => {
-      const d = b.producedAt.toISOString().split('T')[0];
-      if (d >= dateRange.start && d <= dateRange.end && b.location !== 'Fábrica') {
-        dist[b.location] = (dist[b.location] || 0) + b.grams / 1000;
+    storeClosingLogs.forEach(log => {
+      const d = log.date.toISOString().split('T')[0];
+      if (d >= dateRange.start && d <= dateRange.end) {
+        log.items.forEach(item => {
+          if (item.soldGrams > 0) {
+            const flavor = flavors.find(f => f.id === item.flavorId)?.name || 'Outros';
+            const existing = report[log.storeName].find((r:any) => r.flavor === flavor);
+            if (existing) {
+              existing.grams += item.soldGrams;
+              existing.count += 1;
+            } else {
+              report[log.storeName].push({ flavor, grams: item.soldGrams, count: 1 });
+            }
+          }
+        });
       }
     });
+    return report;
+  }, [storeClosingLogs, dateRange, flavors]);
 
-    return Object.entries(dist).map(([name, kg]) => ({ name, kg }));
-  }, [buckets, dateRange]);
-
-  const categoryDistribution = useMemo(() => {
-    const dist: any = {};
+  // 3. Gráfico Horizontal de Categorias
+  const categoryGrams = useMemo(() => {
+    const data: any = {};
     filteredLogs.forEach(l => {
       l.entries.forEach(e => {
         const flavor = flavors.find(f => f.id === e.flavorId);
         const cat = categories.find(c => c.id === flavor?.categoryIds?.[0])?.name || 'Outros';
-        dist[cat] = (dist[cat] || 0) + e.totalGrams / 1000;
+        data[cat] = (data[cat] || 0) + e.totalGrams / 1000;
       });
     });
-    return Object.entries(dist).map(([name, value]) => ({ name, value }));
+    return Object.entries(data).map(([name, value]) => ({ name, value }))
+      .sort((a:any, b:any) => b.value - a.value);
   }, [filteredLogs, flavors, categories]);
 
-  const totalKg = timelineData.reduce((a, b) => a + Number(b.kg), 0);
+  // 4. Auditoria Detalhada
+  const unitAudit = useMemo(() => {
+    const audit: any = {};
+    ['Fábrica', ...STORES].forEach(loc => {
+      const locBuckets = buckets.filter(b => b.location === loc && b.status === 'estoque');
+      const flavorsStats: any = {};
+      locBuckets.forEach(b => {
+        const f = flavors.find(fl => fl.id === b.flavorId)?.name || 'Desconhecido';
+        if (!flavorsStats[f]) flavorsStats[f] = { grams: 0, count: 0 };
+        flavorsStats[f].grams += b.grams;
+        flavorsStats[f].count += 1;
+      });
+      audit[loc] = {
+        totalKg: locBuckets.reduce((a, b) => a + b.grams, 0) / 1000,
+        bucketCount: locBuckets.length,
+        items: Object.entries(flavorsStats).map(([name, s]: any) => ({ name, kg: s.grams / 1000, count: s.count }))
+          .sort((a, b) => b.kg - a.kg)
+      };
+    });
+    return audit;
+  }, [buckets, flavors]);
 
   return (
     <div className="space-y-10 pb-32 animate-in fade-in duration-500 max-w-4xl mx-auto">
       <header className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-8 rounded-[40px] border border-fuchsia-50 shadow-sm gap-6">
         <div>
-          <h2 className="text-3xl font-black text-gray-800 tracking-tight">Relatórios Lorenza</h2>
-          <p className="text-[10px] font-black text-fuchsia-400 uppercase tracking-widest mt-1">Visão 360 do seu negócio</p>
+          <h2 className="text-3xl font-black text-gray-800 tracking-tight">Analytics Lorenza</h2>
+          <p className="text-[10px] font-black text-fuchsia-400 uppercase tracking-widest mt-1">Visão 360 do Negócio</p>
         </div>
-        <button 
-          onClick={exportToCSV} 
-          disabled={isSyncing}
-          className="w-full md:w-auto magenta-gradient text-white px-8 py-5 rounded-[24px] shadow-xl shadow-fuchsia-100 flex items-center justify-center gap-4 hover:scale-105 transition-all active:scale-95 disabled:opacity-50"
-        >
-          <Download size={22} />
-          <span className="text-xs font-black uppercase tracking-widest">Extrair Excel (CSV)</span>
+        <button onClick={exportToCSV} className="w-full md:w-auto magenta-gradient text-white px-8 py-5 rounded-[24px] shadow-xl flex items-center justify-center gap-4">
+          <Download size={22} /> Extrair Relatório Global
         </button>
       </header>
 
-      {/* Relatório de Estoque por Unidade */}
-      <section className="space-y-6">
+      {/* Auditoria por Unidade com Expansão */}
+      <section className="space-y-4">
         <h3 className="text-xs font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-3 px-4">
-          <MapPin size={18} className="text-fuchsia-500" /> Auditoria por Unidade (Hoje)
+          <MapPin size={18} className="text-fuchsia-500" /> Auditoria Detalhada de Unidades
         </h3>
-        <div className="grid grid-cols-1 gap-4">
-          {(Object.entries(storeStockReport) as [string, StoreStockData][]).map(([loc, data]) => (
-            <div key={loc} className="bg-white rounded-[32px] border border-fuchsia-50 shadow-sm overflow-hidden transition-all duration-300">
-               <button 
-                onClick={() => setExpandedStore(expandedStore === loc ? null : loc)}
-                className="w-full p-8 flex justify-between items-center hover:bg-fuchsia-50/10 transition-colors"
-               >
-                 <div className="flex items-center gap-6 text-left">
-                    <div className={`w-16 h-16 rounded-3xl flex items-center justify-center shadow-inner ${data.totalGrams > 50000 ? 'bg-green-50 text-green-500' : 'bg-fuchsia-50 text-fuchsia-500'}`}>
-                      <Package size={32} />
+        {Object.entries(unitAudit).map(([loc, data]: any) => (
+          <div key={loc} className="bg-white rounded-[32px] border border-fuchsia-50 shadow-sm overflow-hidden">
+            <button 
+              onClick={() => setExpandedStore(expandedStore === loc ? null : loc)}
+              className="w-full p-6 flex justify-between items-center hover:bg-fuchsia-50/10 transition-colors"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-fuchsia-50 rounded-2xl flex items-center justify-center text-fuchsia-500">
+                  <Package size={24} />
+                </div>
+                <div className="text-left">
+                  <h4 className="font-black text-gray-800">{loc}</h4>
+                  <p className="text-[9px] font-black text-fuchsia-400 uppercase tracking-widest">{data.totalKg.toFixed(1)}kg • {data.bucketCount} Baldes</p>
+                </div>
+              </div>
+              {expandedStore === loc ? <ChevronUp className="text-fuchsia-300" /> : <ChevronDown className="text-fuchsia-300" />}
+            </button>
+            {expandedStore === loc && (
+              <div className="px-6 pb-6 animate-in slide-in-from-top-2">
+                <div className="grid grid-cols-1 gap-2 pt-4 border-t border-fuchsia-50">
+                  {data.items.slice(0, 1).map((item:any) => (
+                    <div key="top" className="bg-amber-50 p-4 rounded-2xl border border-amber-100 flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <Award className="text-amber-500" size={16} />
+                        <span className="text-xs font-black uppercase text-amber-700">Líder de Estoque: {item.name}</span>
+                      </div>
+                      <span className="text-lg font-black text-amber-600">{item.kg.toFixed(1)}kg</span>
                     </div>
-                    <div>
-                      <h4 className="text-xl font-black text-gray-800 tracking-tight">{loc}</h4>
-                      <div className="flex items-center gap-3 mt-1">
-                        <span className="text-[10px] font-black text-fuchsia-600 uppercase tracking-widest">{(data.totalGrams/1000).toFixed(1)}kg</span>
-                        <span className="w-1 h-1 bg-gray-200 rounded-full" />
-                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{data.bucketCount} Baldes</span>
+                  ))}
+                  {data.items.map((item: any) => (
+                    <div key={item.name} className="flex justify-between items-center p-3 hover:bg-fuchsia-50/30 rounded-xl transition-all">
+                      <div className="flex items-center gap-3">
+                        <div className="w-1.5 h-1.5 bg-fuchsia-400 rounded-full" />
+                        <span className="text-xs font-bold text-gray-600">{item.name}</span>
+                      </div>
+                      <div className="flex gap-4">
+                        <span className="text-[10px] font-black text-fuchsia-300 uppercase">{item.count} un</span>
+                        <span className="text-xs font-black text-fuchsia-600">{item.kg.toFixed(1)}kg</span>
                       </div>
                     </div>
-                 </div>
-                 <div className="bg-fuchsia-50 p-2 rounded-xl text-fuchsia-200">
-                   {expandedStore === loc ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-                 </div>
-               </button>
-               
-               {expandedStore === loc && (
-                 <div className="px-8 pb-8 animate-in slide-in-from-top-4">
-                    <div className="border-t border-fuchsia-50 pt-6 space-y-3">
-                       {Object.entries(data.flavors).length === 0 ? (
-                         <div className="py-12 flex flex-col items-center gap-3 text-gray-300 bg-gray-50/50 rounded-3xl border-2 border-dashed border-gray-50">
-                           <AlertCircle size={32} />
-                           <p className="text-xs font-bold uppercase tracking-widest">Unidade sem estoque ativo</p>
-                         </div>
-                       ) : (
-                         Object.entries(data.flavors)
-                          .sort((a: any, b: any) => b[1].grams - a[1].grams)
-                          .map(([flavor, stats]: any) => (
-                           <div key={flavor} className="flex justify-between items-center p-5 bg-fuchsia-50/30 rounded-2xl border border-fuchsia-100/20 hover:bg-fuchsia-50 transition-colors">
-                              <span className="text-xs font-black text-gray-700 uppercase tracking-tighter">{flavor}</span>
-                              <div className="flex gap-6 items-center">
-                                <span className="text-[9px] font-black text-fuchsia-300 uppercase tracking-[0.2em]">{stats.count} vol</span>
-                                <div className="text-right">
-                                  <span className="text-lg font-black text-fuchsia-600">{(stats.grams/1000).toFixed(1)}</span>
-                                  <span className="text-[10px] font-bold text-fuchsia-300 ml-1">kg</span>
-                                </div>
-                              </div>
-                           </div>
-                         ))
-                       )}
-                    </div>
-                 </div>
-               )}
-            </div>
-          ))}
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </section>
+
+      {/* Gráfico de Categorias Horizontal */}
+      <section className="bg-white p-10 rounded-[56px] border border-fuchsia-50 shadow-sm">
+        <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-10 flex items-center gap-3">
+          <BarChart3 size={18} className="text-fuchsia-500" /> Produção Total por Categoria (kg)
+        </h3>
+        <div className="h-80">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart layout="vertical" data={categoryGrams} margin={{ left: 20 }}>
+              <XAxis type="number" hide />
+              <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 11, fontWeight: 800, fill: '#64748b' }} width={100} />
+              <Tooltip cursor={{ fill: '#fdf5ff' }} contentStyle={{ borderRadius: '16px', border: 'none' }} />
+              <Bar dataKey="value" fill="#D946EF" radius={[0, 12, 12, 0]} barSize={32}>
+                {categoryGrams.map((_, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       </section>
 
-      <section className="space-y-8 pt-12 border-t border-fuchsia-50">
-        <h3 className="text-xs font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-3 px-4">
-          <TrendingUp size={18} className="text-fuchsia-500" /> Evolução & Histórico
+      {/* Timeline de Produção Top 5 */}
+      <section className="bg-white p-10 rounded-[56px] border border-fuchsia-50 shadow-sm">
+        <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-10 flex items-center gap-3">
+          <TrendingUp size={18} className="text-fuchsia-500" /> Histórico de Produção: Top 5 Sabores (kg)
         </h3>
-        
-        <div className="bg-white p-8 rounded-[40px] border border-fuchsia-50 shadow-sm grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2 flex items-center gap-2">
-              <Calendar size={12} /> Data Inicial
-            </label>
-            <input type="date" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})} className="w-full bg-fuchsia-50/50 p-5 rounded-2xl border-none font-bold text-gray-600 outline-none focus:ring-2 focus:ring-fuchsia-100 transition-all" />
-          </div>
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2 flex items-center gap-2">
-              <Calendar size={12} /> Data Final
-            </label>
-            <input type="date" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})} className="w-full bg-fuchsia-50/50 p-5 rounded-2xl border-none font-bold text-gray-600 outline-none focus:ring-2 focus:ring-fuchsia-100 transition-all" />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-6">
-          <div className="bg-white p-10 rounded-[48px] border border-fuchsia-50 shadow-sm">
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Massa Produzida</p>
-            <h4 className="text-5xl font-black text-fuchsia-600 tracking-tighter">{totalKg.toFixed(1)}<span className="text-base italic opacity-40 ml-2">kg</span></h4>
-          </div>
-          <div className="bg-white p-10 rounded-[48px] border border-fuchsia-50 shadow-sm">
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Total Lotes</p>
-            <h4 className="text-5xl font-black text-gray-800 tracking-tighter">{filteredLogs.length}</h4>
-          </div>
-        </div>
-
-        <div className="space-y-8">
-          <div className="bg-white p-10 rounded-[56px] border border-fuchsia-50 shadow-sm overflow-hidden">
-            <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-10 flex items-center gap-3">
-              <Share2 size={18} className="text-fuchsia-500" /> Distribuição por Loja (Massa kg)
-            </h3>
-            <div className="h-80 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={distributionByStore}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f8fafc" />
-                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 11, fontWeight: 700, fill: '#94a3b8'}} />
-                  <YAxis axisLine={false} tickLine={false} tick={{fontSize: 11, fontWeight: 700, fill: '#94a3b8'}} />
-                  <Tooltip 
-                    cursor={{fill: '#fdf5ff'}}
-                    contentStyle={{borderRadius: '20px', border: 'none', boxShadow: '0 20px 40px rgba(0,0,0,0.1)'}}
-                  />
-                  <Bar dataKey="kg" fill="#D946EF" radius={[12, 12, 0, 0]} barSize={60} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="mt-6 flex justify-around">
-              {distributionByStore.map(s => (
-                <div key={s.name} className="text-center">
-                  <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mb-1">{s.name}</p>
-                  <p className="text-xl font-black text-fuchsia-600">{s.kg.toFixed(1)}kg</p>
-                </div>
+        <div className="h-80">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={timelineMultiData.data}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f8fafc" />
+              <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700 }} />
+              <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700 }} />
+              <Tooltip contentStyle={{ borderRadius: '24px', border: 'none', boxShadow: '0 10px 30px rgba(0,0,0,0.1)' }} />
+              <Legend verticalAlign="top" height={36} iconType="circle" />
+              {timelineMultiData.flavors.map((f, i) => (
+                <Line key={f} type="monotone" dataKey={f} stroke={COLORS[i % COLORS.length]} strokeWidth={4} dot={false} />
               ))}
-            </div>
-          </div>
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
 
-          <div className="bg-white p-10 rounded-[56px] border border-fuchsia-50 shadow-sm">
-            <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-10 flex items-center gap-3">
-              <TrendingUp size={18} className="text-fuchsia-500" /> Produção Diária (Massa kg)
-            </h3>
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={timelineData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f8fafc" />
-                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 11, fontWeight: 700, fill: '#94a3b8'}} />
-                  <YAxis axisLine={false} tickLine={false} tick={{fontSize: 11, fontWeight: 700, fill: '#94a3b8'}} />
-                  <Tooltip 
-                    contentStyle={{borderRadius: '24px', border: 'none', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.15)', fontWeight: 800, padding: '16px'}}
-                    itemStyle={{color: '#D946EF'}}
-                  />
-                  <Line type="monotone" dataKey="kg" stroke="#D946EF" strokeWidth={6} dot={{r: 6, fill: '#D946EF', strokeWidth: 0}} activeDot={{r: 10}} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="bg-white p-10 rounded-[56px] border border-fuchsia-50 shadow-sm">
-              <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-10 flex items-center gap-3">
-                <PieIcon size={18} className="text-fuchsia-500" /> Mix de Categorias
-              </h3>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={categoryDistribution} innerRadius={70} outerRadius={100} paddingAngle={10} dataKey="value">
-                      {categoryDistribution.map((_, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} strokeWidth={0} />)}
-                    </Pie>
-                    <Tooltip contentStyle={{borderRadius: '20px', border: 'none'}} />
-                    <Legend verticalAlign="bottom" iconType="circle" wrapperStyle={{fontSize: 12, fontWeight: 800, textTransform: 'uppercase', paddingTop: '30px'}} />
-                  </PieChart>
-                </ResponsiveContainer>
+      {/* Itens Vendidos por Loja */}
+      <section className="space-y-6">
+        <h3 className="text-xs font-black text-gray-400 uppercase tracking-[0.3em] flex items-center gap-3 px-4">
+          <List size={18} className="text-fuchsia-500" /> Resumo de Vendas por Unidade
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {STORES.map(s => (
+            <div key={s} className="bg-white p-6 rounded-[32px] border border-fuchsia-50 shadow-sm">
+              <h4 className="font-black text-gray-800 text-sm mb-6 pb-2 border-b border-fuchsia-50 flex items-center gap-2">
+                 <StoreIcon size={16} className="text-fuchsia-300" /> {s}
+              </h4>
+              <div className="space-y-4">
+                {salesByStoreReport[s].length === 0 ? (
+                  <p className="text-[10px] text-gray-300 font-bold italic">Nenhuma venda registrada.</p>
+                ) : (
+                  salesByStoreReport[s].map((item:any) => (
+                    <div key={item.flavor} className="flex justify-between items-end">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] font-black uppercase text-gray-400 truncate max-w-[100px]">{item.flavor}</span>
+                        <span className="text-[9px] font-bold text-fuchsia-300">{item.count} baldes</span>
+                      </div>
+                      <span className="text-sm font-black text-fuchsia-600">{(item.grams/1000).toFixed(1)}kg</span>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
-
-            <div className="bg-white p-10 rounded-[56px] border border-fuchsia-50 shadow-sm">
-              <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest mb-10 flex items-center gap-3">
-                <BarChart3 size={18} className="text-fuchsia-500" /> Top 5 Sabores Produzidos
-              </h3>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart layout="vertical" data={flavorRanking} margin={{left: 20}}>
-                    <XAxis type="number" hide />
-                    <YAxis dataKey="name" type="category" width={110} axisLine={false} tickLine={false} tick={{fontSize: 10, fontWeight: 800, fill: '#64748b'}} />
-                    <Tooltip cursor={{fill: '#fdf5ff'}} />
-                    <Bar dataKey="kg" fill="#D946EF" radius={[0, 16, 16, 0]} barSize={28} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
+          ))}
         </div>
       </section>
     </div>

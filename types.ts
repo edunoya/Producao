@@ -1,5 +1,6 @@
 
 export type StoreName = 'Fábrica' | 'Campo Duna' | 'Casa Kimo' | 'Rosa';
+export type UnitType = 'Balde' | 'TakeAway 240ml';
 
 export interface Category {
   id: string;
@@ -19,6 +20,7 @@ export interface Bucket {
   id: string;
   flavorId: string;
   grams: number;
+  unitType: UnitType; // Diferenciação solicitada entre baldes e unidades menores
   producedAt: Date;
   note?: string;
   location: StoreName;
@@ -33,6 +35,7 @@ export interface ProductionLog {
     flavorId: string;
     totalGrams: number;
     bucketCount: number;
+    unitType: UnitType;
   }[];
   date: Date;
 }
@@ -40,16 +43,20 @@ export interface ProductionLog {
 export interface StoreClosingLog {
   id: string;
   storeName: StoreName;
+  employeeName: string; // Registro do funcionário solicitado
   date: Date;
   totalKg: number;
   items: {
     flavorId: string;
     grams: number;
+    unitType: UnitType;
+    soldGrams: number; // Cálculo da diferença de venda
   }[];
 }
 
 export interface ProductionEntry {
   flavorId: string;
+  unitType: UnitType;
   weights: number[];
 }
 
