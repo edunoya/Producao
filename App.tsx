@@ -4,12 +4,10 @@ import { HashRouter, Routes, Route } from 'react-router-dom';
 import { InventoryProvider } from './store/InventoryContext';
 import { Loader2, AlertTriangle } from 'lucide-react';
 
-// Função auxiliar para recarregar a página se um módulo falhar (comum em novos deploys)
 const safeLazy = (importFn: () => Promise<any>) => {
   return lazy(() => 
     importFn().catch(err => {
       console.error("Erro ao carregar módulo:", err);
-      // Opcional: recarregar a página automaticamente uma vez
       return { default: () => (
         <div className="h-screen flex flex-col items-center justify-center p-6 text-center">
           <AlertTriangle className="text-amber-500 mb-4" size={48} />
@@ -29,6 +27,7 @@ const DistributionForm = safeLazy(() => import('./components/DistributionForm'))
 const InventoryList = safeLazy(() => import('./components/InventoryList'));
 const Settings = safeLazy(() => import('./components/Settings'));
 const Reports = safeLazy(() => import('./components/Reports'));
+const AdminInventory = safeLazy(() => import('./components/AdminInventory'));
 
 const LoadingFallback = () => (
   <div className="flex flex-col items-center justify-center h-screen bg-[#FFFDF5] gap-4">
@@ -55,7 +54,7 @@ const App: React.FC = () => {
             <Route path="/" element={<Layout><Dashboard /></Layout>} />
             <Route path="/producao" element={<Layout><ProductionForm /></Layout>} />
             <Route path="/distribuicao" element={<Layout><DistributionForm /></Layout>} />
-            <Route path="/estoque" element={<Layout><InventoryList /></Layout>} />
+            <Route path="/estoque" element={<Layout><AdminInventory /></Layout>} />
             <Route path="/configuracoes" element={<Layout><Settings /></Layout>} />
             <Route path="/relatorios" element={<Layout><Reports /></Layout>} />
             <Route path="*" element={<Layout><Dashboard /></Layout>} />

@@ -15,8 +15,6 @@ interface InventoryContextType {
   isSyncing: boolean;
   isInitialLoad: boolean;
   addProductionBatch: (entries: ProductionEntry[], note: string, date: Date) => Promise<void>;
-  updateProductionBatch: (id: string, entries: ProductionEntry[], note: string) => Promise<void>;
-  deleteProductionBatch: (id: string) => Promise<void>;
   distributeBuckets: (entry: DistributionEntry) => Promise<void>;
   saveStoreClosing: (store: StoreName, employee: string, closingBuckets: Bucket[]) => Promise<void>;
   markAsSold: (bucketId: string) => Promise<void>;
@@ -24,8 +22,6 @@ interface InventoryContextType {
   updateBucketWeight: (id: string, grams: number) => Promise<void>;
   updateFlavor: (f: Flavor) => Promise<void>;
   addCategory: (name: string) => Promise<void>;
-  updateCategory: (c: Category) => Promise<void>;
-  deleteCategory: (id: string) => Promise<void>;
   exportToCSV: () => void;
   resetDatabase: () => Promise<void>;
   getSuggestedDistribution: (location: StoreName) => Bucket[];
@@ -47,7 +43,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [flavors]);
 
   useEffect(() => {
-    const safetyTimeout = setTimeout(() => { if (isInitialLoad) setIsInitialLoad(false); }, 3000);
+    const safetyTimeout = setTimeout(() => { if (isInitialLoad) setIsInitialLoad(false); }, 4000);
     if (!isFirebaseConfigured || !db) { setIsInitialLoad(false); return; }
 
     const docRef = doc(db, "inventory", "main");
@@ -55,6 +51,8 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (snap.exists()) {
         const data = snap.data();
         const toDate = (val: any) => val instanceof Timestamp ? val.toDate() : new Date(val || Date.now());
+        
+        // Proteção contra dados corrompidos ou nulos no Firestore
         if (data.buckets) setBuckets(data.buckets.map((b: any) => ({ ...b, producedAt: toDate(b.producedAt) })));
         if (data.flavors) setFlavors(data.flavors);
         if (data.categories) setCategories(data.categories);
@@ -63,39 +61,49 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
       setIsInitialLoad(false);
       clearTimeout(safetyTimeout);
+    }, (error) => {
+      console.error("Firestore Error:", error);
+      setIsInitialLoad(false);
     });
-    return () => { unsub(); clearTimeout(safetyTimeout); };
+
+    return () => unsub();
   }, []);
 
   const persist = async (updates: any) => {
     if (!db) return false;
     setIsSyncing(true);
     try {
-      await setDoc(doc(db, "inventory", "main"), { ...updates, lastUpdated: new Date().toISOString() }, { merge: true });
+      await setDoc(doc(db, "inventory", "main"), { 
+        ...updates, 
+        lastUpdated: new Date().toISOString() 
+      }, { merge: true });
       return true;
-    } catch (e: any) { return false; } finally { setIsSyncing(false); }
+    } catch (e: any) {
+      console.error("Erro ao persistir no banco:", e.message);
+      return false;
+    } finally {
+      setIsSyncing(false);
+    }
   };
-
-  const getSuggestedDistribution = useCallback((location: StoreName) => {
-    return buckets.filter(b => b.location === location && b.status === 'estoque')
-      .sort((a, b) => (flavorsMap[a.flavorId]?.name || '').localeCompare(flavorsMap[b.flavorId]?.name || ''));
-  }, [buckets, flavorsMap]);
 
   const addProductionBatch = async (entries: ProductionEntry[], note: string, date: Date) => {
     const newBuckets: Bucket[] = [];
     const logEntries: any[] = [];
-    const batchId = Math.random().toString(36).slice(2);
+    const batchId = `BATCH-${Date.now()}`;
     
     entries.forEach(entry => {
       const flavor = flavorsMap[entry.flavorId];
-      let seq = buckets.filter(b => b.flavorId === entry.flavorId).length + 1;
-      const totalGrams = entry.weights.reduce((a, b) => a + Number(b), 0);
+      if (!flavor) return;
 
-      entry.weights.forEach(w => {
+      let seq = buckets.filter(b => b.flavorId === entry.flavorId).length + 1;
+      const validWeights = entry.weights.filter(w => w > 0);
+      const totalGrams = validWeights.reduce((a, b) => a + b, 0);
+
+      validWeights.forEach(w => {
         newBuckets.push({
-          id: `${flavor?.initials || 'G'}-${Date.now().toString().slice(-4)}-${seq++}`,
+          id: `${flavor.initials}-${Date.now().toString().slice(-4)}-${seq++}`,
           flavorId: entry.flavorId,
-          grams: Number(w),
+          grams: w,
           unitType: entry.unitType,
           producedAt: date,
           location: 'Fábrica',
@@ -104,37 +112,37 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           note: batchId
         });
       });
-      logEntries.push({ flavorId: entry.flavorId, totalGrams, bucketCount: entry.weights.length, unitType: entry.unitType });
+
+      if (validWeights.length > 0) {
+        logEntries.push({ 
+          flavorId: entry.flavorId, 
+          totalGrams, 
+          bucketCount: validWeights.length, 
+          unitType: entry.unitType 
+        });
+      }
     });
 
-    await persist({ 
-      buckets: [...buckets, ...newBuckets], 
-      productionLogs: [{ id: batchId, batchNote: note, entries: logEntries, date } as ProductionLog, ...productionLogs] 
-    });
+    if (newBuckets.length > 0) {
+      await persist({ 
+        buckets: [...buckets, ...newBuckets], 
+        productionLogs: [{ 
+          id: batchId, 
+          batchNote: note, 
+          entries: logEntries, 
+          date 
+        } as ProductionLog, ...productionLogs] 
+      });
+    }
   };
 
-  // Add missing updateProductionBatch fix
-  const updateProductionBatch = async (id: string, entries: ProductionEntry[], note: string) => {
-    const updatedLogs = productionLogs.map(log => 
-      log.id === id ? { 
-        ...log, 
-        batchNote: note, 
-        entries: entries.map(e => ({
-          flavorId: e.flavorId,
-          totalGrams: e.weights.reduce((a, b) => a + Number(b), 0),
-          bucketCount: e.weights.length,
-          unitType: e.unitType
-        })) 
-      } : log
+  const distributeBuckets = async (entry: DistributionEntry) => {
+    const updated = buckets.map(b => 
+      entry.bucketIds.includes(b.id) 
+        ? { ...b, location: entry.targetStore, status: 'estoque' as const } 
+        : b
     );
-    await persist({ productionLogs: updatedLogs });
-  };
-
-  // Add missing deleteProductionBatch fix
-  const deleteProductionBatch = async (id: string) => {
-    const updatedLogs = productionLogs.filter(log => log.id !== id);
-    const updatedBuckets = buckets.filter(b => b.note !== id);
-    await persist({ productionLogs: updatedLogs, buckets: updatedBuckets });
+    await persist({ buckets: updated });
   };
 
   const saveStoreClosing = async (store: StoreName, employee: string, closingBuckets: Bucket[]) => {
@@ -142,16 +150,30 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const updatedBuckets = buckets.map(b => {
       if (b.location === store && b.status === 'estoque') {
         const found = closingBuckets.find(cb => cb.id === b.id);
-        const soldGrams = b.grams - (found ? found.grams : 0);
-        logItems.push({ flavorId: b.flavorId, grams: found?.grams || 0, unitType: b.unitType, soldGrams });
-        return found ? { ...b, grams: Number(found.grams) } : { ...b, status: 'vendido' as const };
+        
+        // Se o balde não está na lista enviada, assumimos que foi vendido (0g)
+        const currentGrams = found ? Number(found.grams) : 0;
+        const soldGrams = b.grams - currentGrams;
+        
+        logItems.push({ 
+          flavorId: b.flavorId, 
+          grams: currentGrams, 
+          unitType: b.unitType, 
+          soldGrams: Math.max(0, soldGrams) 
+        });
+
+        if (currentGrams <= 0) {
+          return { ...b, grams: 0, status: 'vendido' as const };
+        }
+        return { ...b, grams: currentGrams };
       }
       return b;
     });
 
     const totalKg = closingBuckets.reduce((a, b) => a + Number(b.grams), 0) / 1000;
+    
     const log: StoreClosingLog = {
-      id: Math.random().toString(36).slice(2),
+      id: `CLOSE-${Date.now()}`,
       storeName: store,
       employeeName: employee,
       date: new Date(),
@@ -159,45 +181,72 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       items: logItems
     };
 
-    await persist({ buckets: updatedBuckets, storeClosingLogs: [log, ...storeClosingLogs] });
+    await persist({ 
+      buckets: updatedBuckets, 
+      storeClosingLogs: [log, ...storeClosingLogs] 
+    });
   };
 
-  const distributeBuckets = async (entry: DistributionEntry) => {
-    const updated = buckets.map(b => entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b);
-    await persist({ buckets: updated });
+  const markAsSold = async (id: string) => {
+    await persist({ 
+      buckets: buckets.map(b => b.id === id ? { ...b, status: 'vendido' as const, grams: 0 } : b) 
+    });
   };
 
-  const markAsSold = async (id: string) => { await persist({ buckets: buckets.map(b => b.id === id ? { ...b, status: 'vendido' as const } : b) }); };
-  const updateBucketWeight = async (id: string, grams: number) => { await persist({ buckets: buckets.map(b => b.id === id ? { ...b, grams: Number(grams) } : b) }); };
-  const deleteBucket = async (id: string) => { await persist({ buckets: buckets.filter(b => b.id !== id) }); };
-  const updateFlavor = async (f: Flavor) => { await persist({ flavors: flavors.map(old => old.id === f.id ? f : old) }); };
-  const addCategory = async (name: string) => { await persist({ categories: [...categories, { id: Date.now().toString(), name }] }); };
-  
-  // Add missing updateCategory fix
-  const updateCategory = async (c: Category) => {
-    await persist({ categories: categories.map(old => old.id === c.id ? c : old) });
+  const deleteBucket = async (id: string) => {
+    await persist({ buckets: buckets.filter(b => b.id !== id) });
   };
 
-  // Add missing deleteCategory fix
-  const deleteCategory = async (id: string) => {
-    await persist({ categories: categories.filter(c => c.id !== id) });
+  const updateBucketWeight = async (id: string, grams: number) => {
+    await persist({ 
+      buckets: buckets.map(b => b.id === id ? { ...b, grams: Math.max(0, grams) } : b) 
+    });
   };
 
-  const resetDatabase = async () => { if (window.confirm("Zerar banco?")) await persist({ buckets: [], productionLogs: [], storeClosingLogs: [] }); };
+  const getSuggestedDistribution = useCallback((location: StoreName) => {
+    return buckets
+      .filter(b => b.location === location && b.status === 'estoque')
+      .sort((a, b) => (flavorsMap[a.flavorId]?.name || '').localeCompare(flavorsMap[b.flavorId]?.name || ''));
+  }, [buckets, flavorsMap]);
+
+  const updateFlavor = async (f: Flavor) => {
+    await persist({ flavors: flavors.map(old => old.id === f.id ? f : old) });
+  };
+
+  const addCategory = async (name: string) => {
+    await persist({ categories: [...categories, { id: Date.now().toString(), name }] });
+  };
+
+  const resetDatabase = async () => {
+    if (window.confirm("ATENÇÃO: Isso apagará TODOS os dados de estoque e produção. Continuar?")) {
+      await persist({ 
+        buckets: [], 
+        productionLogs: [], 
+        storeClosingLogs: [] 
+      });
+      window.location.reload();
+    }
+  };
 
   const exportToCSV = () => {
-    const header = "Data,Unidade,Sabor,Tipo,Massa(g),Status\n";
-    const rows = buckets.map(b => `${b.producedAt.toLocaleDateString()},${b.location},${flavorsMap[b.flavorId]?.name},${b.unitType},${b.grams},${b.status}`).join('\n');
-    const blob = new Blob([header + rows], { type: 'text/csv' });
+    const header = "Data,Unidade,Sabor,ID,Peso(g),Status\n";
+    const rows = buckets.map(b => 
+      `${b.producedAt.toLocaleDateString()},${b.location},${flavorsMap[b.flavorId]?.name},${b.id},${b.grams},${b.status}`
+    ).join('\n');
+    
+    const blob = new Blob(["\uFEFF" + header + rows], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'estoque_lorenza.csv'; a.click();
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `estoque_lorenza_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
   };
 
   return (
     <InventoryContext.Provider value={{ 
       buckets, flavors, flavorsMap, categories, productionLogs, storeClosingLogs, isSyncing, isInitialLoad,
-      addProductionBatch, updateProductionBatch, deleteProductionBatch, distributeBuckets, saveStoreClosing, 
-      markAsSold, deleteBucket, updateBucketWeight, updateFlavor, addCategory, updateCategory, deleteCategory,
+      addProductionBatch, distributeBuckets, saveStoreClosing, 
+      markAsSold, deleteBucket, updateBucketWeight, updateFlavor, addCategory, 
       exportToCSV, resetDatabase, getSuggestedDistribution
     }}>
       {children}
