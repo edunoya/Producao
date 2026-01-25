@@ -2,6 +2,8 @@
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
+// Using process.env instead of import.meta.env to resolve 'env' property errors on ImportMeta.
+// These are injected by Vite's define configuration.
 const firebaseConfig = {
   apiKey: process.env.VITE_FIREBASE_API_KEY,
   authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN,

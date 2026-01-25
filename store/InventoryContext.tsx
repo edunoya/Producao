@@ -45,20 +45,27 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [flavors]);
 
   useEffect(() => {
+    // Safety timeout: If Firebase doesn't respond in 6s, allow app to render anyway
+    const safetyTimeout = setTimeout(() => {
+      if (isInitialLoad) {
+        console.warn("Safety timeout: Firebase demorou demais. Carregando interface...");
+        setIsInitialLoad(false);
+      }
+    }, 6000);
+
     if (!isFirebaseConfigured || !db) {
       console.warn("Firebase não configurado ou offline. Usando dados locais.");
       setIsInitialLoad(false);
+      clearTimeout(safetyTimeout);
       return;
     }
 
     const docRef = doc(db, "inventory", "main");
     
-    // Tenta verificar se o documento existe, se não, inicializa
     const initializeDb = async () => {
       try {
         const snap = await getDoc(docRef);
         if (!snap.exists()) {
-          console.log("Inicializando documento principal no Firestore...");
           await setDoc(docRef, {
             buckets: [],
             flavors: INITIAL_FLAVORS,
@@ -69,7 +76,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           });
         }
       } catch (e) {
-        console.error("Erro ao verificar/inicializar Firestore:", e);
+        console.error("Erro ao verificar Firestore:", e);
       }
     };
 
@@ -87,19 +94,23 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         if (data.storeClosingLogs) setStoreClosingLogs(data.storeClosingLogs.map((l: any) => ({ ...l, date: toDate(l.date) })));
       }
       setIsInitialLoad(false);
+      clearTimeout(safetyTimeout);
     }, (error) => {
       console.error("Firebase Snapshot Error:", error.message);
       setIsInitialLoad(false);
+      clearTimeout(safetyTimeout);
     });
 
-    return () => unsub();
+    return () => {
+      unsub();
+      clearTimeout(safetyTimeout);
+    };
   }, []);
 
   const persist = async (updates: any) => {
     if (!db) return false;
     setIsSyncing(true);
     try {
-      // Usar setDoc com merge: true é mais seguro que updateDoc se o documento puder não existir
       await setDoc(doc(db, "inventory", "main"), { ...updates, lastUpdated: new Date().toISOString() }, { merge: true });
       return true;
     } catch (e: any) {
@@ -153,11 +164,10 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       logEntries.push({ flavorId: entry.flavorId, totalGrams, bucketCount: entry.weights.length });
     });
 
-    const success = await persist({ 
+    await persist({ 
       buckets: [...buckets, ...newBuckets], 
       productionLogs: [{ id: batchId, batchNote: note, entries: logEntries, date } as ProductionLog, ...productionLogs] 
     });
-    if (!success) throw new Error("Erro ao salvar no Firebase.");
   };
 
   const updateProductionBatch = async (id: string, entries: ProductionEntry[], note: string) => {
@@ -189,37 +199,33 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       logEntries.push({ flavorId: entry.flavorId, totalGrams, bucketCount: entry.weights.length });
     });
 
-    const success = await persist({
+    await persist({
       buckets: [...filteredBuckets, ...newBuckets],
       productionLogs: productionLogs.map(l => l.id === id ? { ...l, batchNote: note, entries: logEntries } : l)
     });
-    if (!success) throw new Error("Erro ao atualizar no Firebase.");
   };
 
   const deleteProductionBatch = async (id: string) => {
     if (!window.confirm("Deseja excluir este lote?")) return;
-    const success = await persist({ 
+    await persist({ 
       buckets: buckets.filter(b => b.note !== id), 
       productionLogs: productionLogs.filter(l => l.id !== id) 
     });
-    if (!success) throw new Error("Erro ao excluir do Firebase.");
   };
 
   const distributeBuckets = async (entry: DistributionEntry) => {
     const updated = buckets.map(b => entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b);
-    const success = await persist({ buckets: updated });
-    if (!success) throw new Error("Erro ao distribuir.");
+    await persist({ buckets: updated });
   };
 
   const markAsSold = async (bucketId: string) => {
     const updated = buckets.map(b => b.id === bucketId ? { ...b, status: 'vendido' as const } : b);
-    const success = await persist({ buckets: updated });
-    if (!success) throw new Error("Erro ao marcar como vendido.");
+    await persist({ buckets: updated });
   };
 
   const updateBucketWeight = async (id: string, grams: number) => {
     const updated = buckets.map(b => b.id === id ? { ...b, grams: Number(grams) } : b);
-    const success = await persist({ buckets: updated });
+    await persist({ buckets: updated });
   };
 
   const saveStoreClosing = async (store: StoreName, closingBuckets: Bucket[]) => {
@@ -240,7 +246,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       items: closingBuckets.map(b => ({ flavorId: b.flavorId, grams: Number(b.grams) }))
     };
 
-    const success = await persist({ buckets: updated, storeClosingLogs: [log, ...storeClosingLogs] });
+    await persist({ buckets: updated, storeClosingLogs: [log, ...storeClosingLogs] });
   };
 
   const deleteBucket = async (id: string) => {
