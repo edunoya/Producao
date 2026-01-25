@@ -3,13 +3,12 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
-  // Load environment variables (VITE_ and others)
+  // Use process.cwd() with type assertion to fix TypeScript error where 'cwd' is not recognized on the 'Process' type in some environments.
   const env = loadEnv(mode, (process as any).cwd(), '');
   
   return {
     plugins: [react()],
     define: {
-      // Explicit injection with empty string fallback
       'process.env.API_KEY': JSON.stringify(env.API_KEY || ""),
       'process.env.VITE_FIREBASE_API_KEY': JSON.stringify(env.VITE_FIREBASE_API_KEY || ""),
       'process.env.VITE_FIREBASE_AUTH_DOMAIN': JSON.stringify(env.VITE_FIREBASE_AUTH_DOMAIN || ""),
@@ -20,8 +19,6 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: 'dist',
-      // CRITICAL: Disabling sourcemaps prevents Vite from generating files that might trigger
-      // CSP unsafe-eval errors in environments where eval() is blocked.
       sourcemap: false, 
       minify: 'esbuild',
       rollupOptions: {
@@ -29,10 +26,6 @@ export default defineConfig(({ mode }) => {
           main: './index.html'
         }
       }
-    },
-    server: {
-      port: 3000,
-      host: true
     }
   };
 });

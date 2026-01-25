@@ -45,16 +45,14 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [flavors]);
 
   useEffect(() => {
-    // Safety timeout: If Firebase doesn't respond in 6s, allow app to render anyway
+    // Reduzido para 3 segundos para uma sensação de carregamento mais rápida
     const safetyTimeout = setTimeout(() => {
       if (isInitialLoad) {
-        console.warn("Safety timeout: Firebase demorou demais. Carregando interface...");
         setIsInitialLoad(false);
       }
-    }, 6000);
+    }, 3000);
 
     if (!isFirebaseConfigured || !db) {
-      console.warn("Firebase não configurado ou offline. Usando dados locais.");
       setIsInitialLoad(false);
       clearTimeout(safetyTimeout);
       return;

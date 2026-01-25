@@ -2,18 +2,22 @@
 import { initializeApp, getApp, getApps } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
-// Using process.env instead of import.meta.env to resolve 'env' property errors on ImportMeta.
-// These are injected by Vite's define configuration.
-const firebaseConfig = {
-  apiKey: process.env.VITE_FIREBASE_API_KEY,
-  authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.VITE_FIREBASE_APP_ID
+const getEnv = (key: string) => {
+  // Tenta obter do process.env (Vite define) ou de constantes globais
+  if (typeof process !== 'undefined' && process.env && process.env[key]) return process.env[key];
+  return "";
 };
 
-export const isFirebaseConfigured = !!(process.env.VITE_FIREBASE_API_KEY && process.env.VITE_FIREBASE_API_KEY.length > 5);
+const firebaseConfig = {
+  apiKey: getEnv('VITE_FIREBASE_API_KEY'),
+  authDomain: getEnv('VITE_FIREBASE_AUTH_DOMAIN'),
+  projectId: getEnv('VITE_FIREBASE_PROJECT_ID'),
+  storageBucket: getEnv('VITE_FIREBASE_STORAGE_BUCKET'),
+  messagingSenderId: getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID'),
+  appId: getEnv('VITE_FIREBASE_APP_ID')
+};
+
+export const isFirebaseConfigured = !!(firebaseConfig.apiKey && firebaseConfig.apiKey.length > 5);
 
 let db: any = null;
 
@@ -24,6 +28,8 @@ if (isFirebaseConfigured) {
   } catch (e) {
     console.error("Erro ao inicializar Firebase:", e);
   }
+} else {
+  console.warn("Firebase não configurado. Verifique as variáveis de ambiente no Vercel.");
 }
 
 export { db };
