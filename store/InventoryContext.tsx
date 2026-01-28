@@ -51,6 +51,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (snap.exists()) {
         const data = snap.data();
         const toDate = (val: any) => val instanceof Timestamp ? val.toDate() : new Date(val || Date.now());
+        
         if (data.buckets) setBuckets(data.buckets.map((b: any) => ({ ...b, producedAt: toDate(b.producedAt) })));
         if (data.flavors) setFlavors(data.flavors);
         if (data.categories) setCategories(data.categories);
@@ -58,7 +59,10 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         if (data.storeClosingLogs) setStoreClosingLogs(data.storeClosingLogs.map((l: any) => ({ ...l, date: toDate(l.date) })));
       }
       setIsInitialLoad(false);
-    }, (err) => { console.error(err); setIsInitialLoad(false); });
+    }, (err) => { 
+      console.error("Firestore Error:", err); 
+      setIsInitialLoad(false); 
+    });
     return () => unsub();
   }, []);
 
@@ -66,13 +70,20 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (!db) return;
     setIsSyncing(true);
     try {
-      await setDoc(doc(db, "inventory", "main"), { ...updates, lastUpdated: new Date().toISOString() }, { merge: true });
-    } catch (e) { console.error("Persist Error:", e); }
-    finally { setIsSyncing(false); }
+      await setDoc(doc(db, "inventory", "main"), { 
+        ...updates, 
+        lastUpdated: new Date().toISOString() 
+      }, { merge: true });
+    } catch (e) { 
+      console.error("Persistence error:", e); 
+      alert("Erro ao salvar dados no servidor. Verifique sua conexão.");
+    } finally { 
+      setIsSyncing(false); 
+    }
   };
 
   const addProductionBatch = async (entries: ProductionEntry[], note: string, date: Date) => {
-    const batchId = `PROD-${Date.now()}`;
+    const batchId = `BATCH-${Date.now()}`;
     const newBuckets: Bucket[] = [];
     const logEntries: any[] = [];
 
@@ -98,7 +109,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (validWeights.length > 0) {
         logEntries.push({
           flavorId: entry.flavorId,
-          totalGrams: validWeights.reduce((a, b) => a + b, 0),
+          totalGrams: validWeights.reduce((a, b) => a + Number(b), 0),
           bucketCount: validWeights.length,
           unitType: entry.unitType
         });
@@ -114,7 +125,12 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const distributeBuckets = async (entry: DistributionEntry) => {
-    const updated = buckets.map(b => entry.bucketIds.includes(b.id) ? { ...b, location: entry.targetStore } : b);
+    // Atomic update: All selected buckets change location at once in the array
+    const updated = buckets.map(b => 
+      entry.bucketIds.includes(b.id) && b.location === 'Fábrica' 
+        ? { ...b, location: entry.targetStore } 
+        : b
+    );
     await persist({ buckets: updated });
   };
 
@@ -123,9 +139,20 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const updatedBuckets = buckets.map(b => {
       if (b.location === store && b.status === 'estoque') {
         const found = closingBuckets.find(cb => cb.id === b.id);
-        const soldGrams = b.grams - (found ? Number(found.grams) : 0);
-        logItems.push({ flavorId: b.flavorId, grams: found?.grams || 0, unitType: b.unitType, soldGrams });
-        return found && found.grams > 0 ? { ...b, grams: Number(found.grams) } : { ...b, status: 'vendido' as const, grams: 0 };
+        const currentGrams = found ? Number(found.grams) : 0;
+        const soldGrams = Math.max(0, b.grams - currentGrams);
+        
+        logItems.push({ 
+          flavorId: b.flavorId, 
+          grams: currentGrams, 
+          unitType: b.unitType, 
+          soldGrams 
+        });
+
+        // If weight is 0 or less, mark as sold
+        return currentGrams > 0 
+          ? { ...b, grams: currentGrams } 
+          : { ...b, status: 'vendido' as const, grams: 0 };
       }
       return b;
     });
@@ -139,7 +166,10 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       items: logItems
     };
 
-    await persist({ buckets: updatedBuckets, storeClosingLogs: [log, ...storeClosingLogs] });
+    await persist({ 
+      buckets: updatedBuckets, 
+      storeClosingLogs: [log, ...storeClosingLogs] 
+    });
   };
 
   const markAsSold = async (id: string) => {
@@ -159,7 +189,8 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const addCategory = async (name: string) => {
-    await persist({ categories: [...categories, { id: Date.now().toString(), name }] });
+    const newCat = { id: Date.now().toString(), name };
+    await persist({ categories: [...categories, newCat] });
   };
 
   const updateCategory = async (c: Category) => {
@@ -167,6 +198,11 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const deleteCategory = async (id: string) => {
+    // Basic protection: don't delete categories in use by flavors
+    if (flavors.some(f => f.categoryIds.includes(id))) {
+      alert("Esta categoria está sendo usada por um ou mais sabores e não pode ser excluída.");
+      return;
+    }
     await persist({ categories: categories.filter(c => c.id !== id) });
   };
 
@@ -175,14 +211,21 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       .sort((a, b) => (flavorsMap[a.flavorId]?.name || '').localeCompare(flavorsMap[b.flavorId]?.name || ''));
   }, [buckets, flavorsMap]);
 
-  const resetDatabase = async () => { if (window.confirm("Zerar tudo?")) await persist({ buckets: [], productionLogs: [], storeClosingLogs: [] }); };
+  const resetDatabase = async () => { 
+    if (window.confirm("ATENÇÃO: Deseja zerar todo o banco de dados? Esta ação é irreversível.")) {
+      await persist({ buckets: [], productionLogs: [], storeClosingLogs: [] }); 
+    }
+  };
   
   const exportToCSV = () => {
-    const header = "Data,Unidade,Sabor,Massa(g),Status\n";
-    const rows = buckets.map(b => `${b.producedAt.toLocaleDateString()},${b.location},${flavorsMap[b.flavorId]?.name},${b.grams},${b.status}`).join('\n');
-    const blob = new Blob([header + rows], { type: 'text/csv' });
+    const header = "ID;Data;Unidade;Sabor;Massa(g);Status\n";
+    const rows = buckets.map(b => `${b.id};${b.producedAt.toLocaleDateString()};${b.location};${flavorsMap[b.flavorId]?.name};${b.grams};${b.status}`).join('\n');
+    const blob = new Blob(["\uFEFF" + header + rows], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'estoque.csv'; a.click();
+    const a = document.createElement('a'); 
+    a.href = url; 
+    a.download = `estoque_lorenza_${new Date().toISOString().split('T')[0]}.csv`; 
+    a.click();
   };
 
   return (

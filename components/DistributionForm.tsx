@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useInventory } from '../store/InventoryContext';
-import { Truck, CheckCircle2, X, Send, RefreshCw, Search, ArrowDownWideNarrow, AlertCircle, Layers, MousePointer2, Trash2, Zap } from 'lucide-react';
+import { Truck, CheckCircle2, X, Send, RefreshCw, Search, ArrowDownWideNarrow, AlertCircle, MousePointer2, Trash2, Zap } from 'lucide-react';
 import { STORES } from '../constants';
 import { Bucket } from '../types';
 
@@ -40,6 +40,17 @@ const DistributionForm: React.FC = () => {
   const handleSend = async () => {
     if (selectedIds.length === 0 || isSyncing) return;
     setErrorMessage(null);
+    
+    // Safety check: ensure all selected items are still in factory stock
+    const availableIds = factoryBuckets.map(b => b.id);
+    const validSelection = selectedIds.every(id => availableIds.includes(id));
+
+    if (!validSelection) {
+      setErrorMessage("Alguns itens selecionados não estão mais na Fábrica. Recarregando...");
+      setSelectedIds([]);
+      return;
+    }
+
     try {
       await distributeBuckets({ targetStore, bucketIds: selectedIds });
       setIsSuccess(true);
@@ -57,22 +68,26 @@ const DistributionForm: React.FC = () => {
 
   const selectAllOfFlavor = (flavorId: string) => {
     const flavorBuckets = factoryBuckets.filter(b => b.flavorId === flavorId).map(b => b.id);
+    const someSelected = flavorBuckets.some(id => selectedIds.includes(id));
     const allSelected = flavorBuckets.every(id => selectedIds.includes(id));
     
     if (allSelected) {
+      // Unselect all if all were already selected
       setSelectedIds(prev => prev.filter(id => !flavorBuckets.includes(id)));
     } else {
+      // Select all (avoid duplicates)
       setSelectedIds(prev => Array.from(new Set([...prev, ...flavorBuckets])));
     }
   };
 
   const selectTopStock = () => {
-    const flavorTotals: Record<string, number> = {};
+    // Select flavors with most units in factory
+    const flavorCounts: Record<string, number> = {};
     factoryBuckets.forEach(b => {
-      flavorTotals[b.flavorId] = (flavorTotals[b.flavorId] || 0) + b.grams;
+      flavorCounts[b.flavorId] = (flavorCounts[b.flavorId] || 0) + 1;
     });
 
-    const topFlavorIds = Object.entries(flavorTotals)
+    const topFlavorIds = Object.entries(flavorCounts)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
       .map(entry => entry[0]);
@@ -100,7 +115,7 @@ const DistributionForm: React.FC = () => {
         <header className="mb-8 flex justify-between items-center">
           <div>
             <h2 className="text-2xl font-black text-gray-800 tracking-tight">Distribuição</h2>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">Movimentação de Estoque</p>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">Envio para Unidades</p>
           </div>
           <div className="w-12 h-12 bg-fuchsia-50 rounded-2xl flex items-center justify-center text-fuchsia-500 shadow-inner">
             <Truck size={28} />
@@ -126,7 +141,7 @@ const DistributionForm: React.FC = () => {
           </div>
         </div>
 
-        {/* Ações Rápidas de Seleção */}
+        {/* Quick Actions */}
         <div className="flex gap-2 mb-4">
           <button 
             onClick={selectTopStock}
@@ -146,7 +161,7 @@ const DistributionForm: React.FC = () => {
         <div className="relative mb-6">
           <input 
             type="text" 
-            placeholder="Buscar sabor ou ID..." 
+            placeholder="Buscar por sabor..." 
             className="w-full bg-fuchsia-50/30 rounded-2xl px-12 py-4 text-sm font-bold outline-none border border-transparent focus:border-fuchsia-100 transition-all shadow-inner"
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
@@ -158,7 +173,7 @@ const DistributionForm: React.FC = () => {
         <div className="space-y-6 max-h-[450px] overflow-y-auto pr-2 custom-scrollbar">
           {groupedBuckets.length === 0 ? (
             <div className="py-20 text-center text-gray-300 font-bold italic border-2 border-dashed border-gray-50 rounded-3xl bg-gray-50/30">
-              Nenhum item disponível na fábrica.
+              Nenhum item na Fábrica no momento.
             </div>
           ) : (
             groupedBuckets.map(([flavorId, bks]) => {
@@ -200,7 +215,7 @@ const DistributionForm: React.FC = () => {
                         >
                           <div className="flex flex-col items-start">
                             <span className="text-[8px] font-mono uppercase text-gray-300 mb-1">{b.id}</span>
-                            <span className="font-black text-xs">{b.grams}{b.unitType === 'Balde' ? 'g' : 'un'}</span>
+                            <span className="font-black text-xs">{(b.grams / 1000).toFixed(2)}kg <span className="text-[9px] text-gray-300 ml-1">({b.unitType})</span></span>
                           </div>
                           <div className={`w-6 h-6 rounded-xl border-2 flex items-center justify-center transition-all ${isSelected ? 'bg-fuchsia-600 border-fuchsia-600 text-white' : 'border-fuchsia-100 bg-white'}`}>
                             {isSelected && <CheckCircle2 size={14} />}
@@ -222,7 +237,7 @@ const DistributionForm: React.FC = () => {
               <h4 className="text-3xl font-black text-gray-800 tracking-tighter">{selectedIds.length} <span className="text-sm text-gray-400 font-bold">un</span></h4>
             </div>
             <div className="text-right">
-              <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Peso Estimado</p>
+              <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Peso Total</p>
               <h4 className="text-3xl font-black text-fuchsia-600 tracking-tighter">
                 {(selectedIds.reduce((acc, id) => {
                   const bk = factoryBuckets.find(b => b.id === id);
@@ -240,7 +255,7 @@ const DistributionForm: React.FC = () => {
             }`}
           >
             {isSyncing ? <RefreshCw size={24} className="animate-spin" /> : isSuccess ? <CheckCircle2 size={24} /> : <Send size={20} />}
-            {isSyncing ? 'Enviando...' : isSuccess ? 'Sucesso!' : `Enviar para ${targetStore}`}
+            {isSyncing ? 'Sincronizando...' : isSuccess ? 'Sucesso!' : `Enviar para ${targetStore}`}
           </button>
         </div>
       </div>

@@ -3,40 +3,44 @@ import { GoogleGenAI } from "@google/genai";
 import { Bucket, Flavor } from "../types";
 
 export const getInventoryInsights = async (buckets: Bucket[], flavors: Flavor[]): Promise<string> => {
-  // Use process.env.API_KEY exclusively for the API key as per GenAI guidelines.
-  // This also fixes the 'env' property error on 'ImportMeta'.
   const apiKey = process.env.API_KEY;
   if (!apiKey) return "API Key não configurada.";
 
-  // Initialize GoogleGenAI instance right before use.
+  // Initialize the GenAI client with the correct parameter structure
   const ai = new GoogleGenAI({ apiKey });
   
-  const inventoryData = buckets.reduce((acc: any, b) => {
-    const flavor = flavors.find(f => f.id === b.flavorId)?.name || 'Desconhecido';
-    if (!acc[flavor]) acc[flavor] = { totalGrams: 0, count: 0, locations: {} };
-    acc[flavor].totalGrams += b.grams;
-    acc[flavor].count += 1;
-    acc[flavor].locations[b.location] = (acc[flavor].locations[b.location] || 0) + 1;
-    return acc;
-  }, {});
+  const inventoryData = buckets
+    .filter(b => b.status === 'estoque')
+    .reduce((acc: any, b) => {
+      const flavor = flavors.find(f => f.id === b.flavorId)?.name || 'Desconhecido';
+      if (!acc[flavor]) acc[flavor] = { totalKg: 0, locations: {} };
+      acc[flavor].totalKg += b.grams / 1000;
+      acc[flavor].locations[b.location] = (acc[flavor].locations[b.location] || 0) + (b.grams / 1000);
+      return acc;
+    }, {});
 
   const prompt = `
-    Analise o seguinte estoque de gelato e forneça 3 insights curtos e práticos para o gerente de produção em português. 
-    Foque em: saberes com pouco estoque, sugestão de próxima produção e distribuição entre as lojas (Campo Duna, Casa Kimo, Rosa).
-    Dados: ${JSON.stringify(inventoryData)}
-    Responda em um parágrafo conciso com bullet points.
+    Como consultor especialista em produção de gelato artesanal para a marca Lorenza, analise os dados de estoque abaixo e forneça 3 insights estratégicos curtos.
+    Foque em: saberes críticos (estoque baixo), sugestão imediata de produção e equilíbrio de distribuição entre Campo Duna, Casa Kimo e Rosa.
+    Dados em KG: ${JSON.stringify(inventoryData)}
+    Responda em português, de forma executiva e direta. Use bullet points.
   `;
 
   try {
-    // Correct usage of generateContent with model name and contents.
+    // Generate content using the correct method signature
     const response = await ai.models.generateContent({
       model: 'gemini-3-pro-preview',
-      contents: prompt,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: {
+        temperature: 0.7,
+        topP: 0.95,
+      }
     });
-    // Use .text property to access the response.
+    
+    // Access response text as a property
     return response.text || "Sem insights disponíveis no momento.";
   } catch (error) {
     console.error("Gemini Error:", error);
-    return "Não foi possível carregar insights inteligentes agora.";
+    return "O analista Gemini está processando outras batidas no momento. Tente novamente em breve.";
   }
 };
